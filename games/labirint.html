@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Лабиринт дракона</title>
+<style>
+:root { --bg:#0E1020; --panel:#181B31; --panel2:#242949; --o1:#FF7A2F; --o2:#FFB020; --text:#fff; --muted:#A3A9CC; }
+* { box-sizing:border-box; user-select:none; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+body { display:flex; flex-direction:column; align-items:center; gap:12px; padding:14px; }
+h1 { margin:0; font-size:26px; letter-spacing:4px; text-transform:uppercase; font-weight:900;
+  background:linear-gradient(90deg,#fff,#FFE2C2,var(--o2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.hud { display:flex; gap:14px; font-size:20px; font-weight:700; align-items:center; flex-wrap:wrap; justify-content:center; }
+.chip { background:var(--panel); border:3px solid var(--panel2); border-radius:12px; padding:6px 14px; }
+canvas { image-rendering:pixelated; border:4px solid #000; box-shadow:0 0 0 3px var(--panel2), 0 14px 40px rgba(0,0,0,.6); max-width:100%; height:auto; }
+.hint { color:var(--muted); font-size:16px; text-align:center; }
+.overlay { position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(6,7,16,.75); }
+.overlay.open { display:flex; }
+.sheet { background:var(--panel); border-radius:24px; padding:30px 40px; text-align:center; box-shadow:0 30px 80px rgba(0,0,0,.6); }
+.sheet h2 { margin:0 0 10px; font-size:34px; }
+.sheet p { font-size:20px; color:var(--muted); margin:0 0 20px; }
+.btn { font:inherit; font-size:26px; font-weight:800; letter-spacing:2px; color:#1a1000; border:0; border-radius:999px; padding:14px 36px; cursor:pointer;
+  background:linear-gradient(135deg,var(--o1),var(--o2)); }
+.pad { display:none; }
+</style>
+</head>
+<body>
+<h1>Лабиринт дракона</h1>
+<div class="hud">
+  <span class="chip" id="lvl">Уровень 1</span>
+  <span class="chip" id="gems">💎 0 / 3</span>
+  <span class="chip" id="steps">Шагов: 0</span>
+</div>
+<canvas id="c"></canvas>
+<div class="hint">Стрелки или WASD. Собери все кристаллы, и дракон откроет выход. Факел светит недалеко, а лабиринт каждый раз новый.</div>
+<div class="overlay" id="ov"><div class="sheet"><h2 id="ovTitle">Уровень пройден!</h2><p id="ovText"></p><button class="btn" id="next">ДАЛЬШЕ</button></div></div>
+<script>
+const P = { k:'#000', w:'#fff', r:'#e0392b', y:'#ffd23f', b:'#3a8be0', g:'#5cc43a', s:'#f1c27d', o:'#ff7a2f', p:'#8b5cf6', d:'#2e7d32', t:'#a0522d', c:'#9ad7ff', q:'#555' };
+const SPR = {
+  hero: [
+    '...kkk..',
+    '..kwwwk.',
+    '..kssk..',
+    '.kbbbbk.',
+    'kbkbbkbk',
+    '.kbbbbk.',
+    '..ktkt..',
+    '..kkkkk.'],
+  gem: [
+    '........',
+    '..cccc..',
+    '.cwcccc.',
+    'cwccccbc',
+    'ccccccbc',
+    '.ccccbc.',
+    '..ccbc..',
+    '...cc...'],
+  dragon: [
+    '..gg..gg',
+    '.gggggg.',
+    'ggkggkgg',
+    'gggggggg',
+    '.ggrrgg.',
+    '..gggg..',
+    '.gg..gg.',
+    'g......g'],
+  dragonAwake: [
+    '..gg..gg',
+    '.gggggg.',
+    'ggyggygg',
+    'gggggggg',
+    '.ggoogg.',
+    '..oooo..',
+    '.gg..gg.',
+    'g......g'],
+  key: [
+    '........',
+    '..yyy...',
+    '.y...y..',
+    '.y...y..',
+    '..yyy...',
+    '...y....',
+    '...yyy..',
+    '...y.y..']
+};
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+const CELL = 8, SCALE = 4;
+let level = 1, cols, rows, grid, hero, gems, dragonPos, steps, seen, won;
+
+function rnd(n) { return Math.floor(Math.random() * n); }
+
+function genMaze(c, r) {
+  // c, r odd; 1 = wall
+  const g = Array.from({ length: r }, () => new Uint8Array(c).fill(1));
+  const stack = [[1, 1]]; g[1][1] = 0;
+  while (stack.length) {
+    const [x, y] = stack[stack.length - 1];
+    const opts = [];
+    for (const [dx, dy] of [[2, 0], [-2, 0], [0, 2], [0, -2]]) {
+      const nx = x + dx, ny = y + dy;
+      if (nx > 0 && nx < c - 1 && ny > 0 && ny < r - 1 && g[ny][nx] === 1) opts.push([nx, ny, dx, dy]);
+    }
+    if (!opts.length) { stack.pop(); continue; }
+    const [nx, ny, dx, dy] = opts[rnd(opts.length)];
+    g[y + dy / 2][x + dx / 2] = 0; g[ny][nx] = 0;
+    stack.push([nx, ny]);
+  }
+  // a few extra openings so there are loops
+  for (let k = 0; k < Math.floor(c * r / 40); k++) {
+    const x = 1 + rnd(c - 2), y = 1 + rnd(r - 2);
+    if (g[y][x] === 1 && ((g[y][x - 1] === 0 && g[y][x + 1] === 0) || (g[y - 1][x] === 0 && g[y + 1][x] === 0))) g[y][x] = 0;
+  }
+  return g;
+}
+
+function farCells(fromX, fromY) {
+  // BFS distances to pick far spots
+  const d = Array.from({ length: rows }, () => new Int16Array(cols).fill(-1));
+  const q = [[fromX, fromY]]; d[fromY][fromX] = 0;
+  while (q.length) {
+    const [x, y] = q.shift();
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nx = x + dx, ny = y + dy;
+      if (grid[ny] && grid[ny][nx] === 0 && d[ny][nx] < 0) { d[ny][nx] = d[y][x] + 1; q.push([nx, ny]); }
+    }
+  }
+  return d;
+}
+
+function newLevel() {
+  const sizes = [[13, 9], [17, 11], [21, 13], [25, 15], [29, 17], [33, 19], [37, 21]];
+  [cols, rows] = sizes[Math.min(level - 1, sizes.length - 1)];
+  grid = genMaze(cols, rows);
+  hero = { x: 1, y: 1 };
+  const d = farCells(1, 1);
+  const cells = [];
+  for (let y = 1; y < rows; y++) for (let x = 1; x < cols; x++) if (grid[y][x] === 0 && d[y][x] > 0) cells.push([x, y, d[y][x]]);
+  cells.sort((a, b) => b[2] - a[2]);
+  dragonPos = { x: cells[0][0], y: cells[0][1] };
+  gems = [];
+  const pool = cells.slice(1).filter(c => c[2] > 4);
+  while (gems.length < 3 && pool.length) { const i = rnd(pool.length); const [x, y] = pool.splice(i, 1)[0]; gems.push({ x, y }); }
+  steps = 0; won = false;
+  seen = Array.from({ length: rows }, () => new Uint8Array(cols));
+  cv.width = cols * CELL; cv.height = rows * CELL;
+  cv.style.width = Math.min(cols * CELL * SCALE, 1000) + 'px';
+  reveal(); updateHud(); draw();
+}
+
+function reveal() {
+  for (let y = -3; y <= 3; y++) for (let x = -3; x <= 3; x++) {
+    const nx = hero.x + x, ny = hero.y + y;
+    if (grid[ny] && nx >= 0 && nx < cols && x * x + y * y <= 10) seen[ny][nx] = 1;
+  }
+}
+
+function spr(name, x, y) {
+  const s = SPR[name];
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const ch = s[r][c]; if (ch === '.') continue;
+    ctx.fillStyle = P[ch]; ctx.fillRect(x * CELL + c, y * CELL + r, 1, 1);
+  }
+}
+
+function draw() {
+  ctx.fillStyle = '#06070f'; ctx.fillRect(0, 0, cv.width, cv.height);
+  for (let y = 0; y < rows; y++) for (let x = 0; x < cols; x++) {
+    if (!seen[y][x]) continue;
+    const dist = (x - hero.x) ** 2 + (y - hero.y) ** 2;
+    const lit = dist <= 10;
+    if (grid[y][x] === 1) {
+      ctx.fillStyle = lit ? '#5a4a6a' : '#2a2436'; ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+      ctx.fillStyle = lit ? '#43364f' : '#1e1a28';
+      ctx.fillRect(x * CELL, y * CELL + 3, CELL, 1); ctx.fillRect(x * CELL, y * CELL + 7, CELL, 1);
+      ctx.fillRect(x * CELL + (y % 2 ? 2 : 6), y * CELL, 1, 3); ctx.fillRect(x * CELL + (y % 2 ? 6 : 2), y * CELL + 4, 1, 3);
+    } else {
+      ctx.fillStyle = lit ? (dist <= 4 ? '#3b3350' : '#2c2640') : '#15121d'; ctx.fillRect(x * CELL, y * CELL, CELL, CELL);
+    }
+  }
+  const allGems = gems.length === 0;
+  if (seen[dragonPos.y][dragonPos.x]) spr(allGems ? 'dragonAwake' : 'dragon', dragonPos.x, dragonPos.y);
+  gems.forEach(g => { if (seen[g.y][g.x]) spr('gem', g.x, g.y); });
+  spr('hero', hero.x, hero.y);
+  // torch glow
+  ctx.fillStyle = 'rgba(255,170,60,0.08)';
+  ctx.fillRect((hero.x - 1) * CELL, (hero.y - 1) * CELL, CELL * 3, CELL * 3);
+}
+
+function updateHud() {
+  document.getElementById('lvl').textContent = 'Уровень ' + level;
+  document.getElementById('gems').textContent = '💎 ' + (3 - gems.length) + ' / 3';
+  document.getElementById('steps').textContent = 'Шагов: ' + steps;
+}
+
+function move(dx, dy) {
+  if (won) return;
+  const nx = hero.x + dx, ny = hero.y + dy;
+  if (!grid[ny] || grid[ny][nx] !== 0) return;
+  hero.x = nx; hero.y = ny; steps++;
+  const gi = gems.findIndex(g => g.x === nx && g.y === ny);
+  if (gi >= 0) gems.splice(gi, 1);
+  reveal(); updateHud(); draw();
+  if (nx === dragonPos.x && ny === dragonPos.y) {
+    if (gems.length === 0) {
+      won = true;
+      document.getElementById('ovTitle').textContent = 'Уровень ' + level + ' пройден!';
+      document.getElementById('ovText').textContent = 'Дракон доволен: все кристаллы на месте. Шагов: ' + steps + '.';
+      document.getElementById('ov').classList.add('open');
+      document.getElementById('next').focus();
+    } else {
+      document.getElementById('ovTitle').textContent = 'Дракон спит';
+      document.getElementById('ovText').textContent = 'Он проснётся, когда ты найдёшь все 3 кристалла. Осталось: ' + gems.length + '.';
+      document.getElementById('ov').classList.add('open');
+      document.getElementById('next').textContent = 'ПОНЯТНО';
+      document.getElementById('next').focus();
+    }
+  }
+}
+
+document.getElementById('next').onclick = () => {
+  document.getElementById('ov').classList.remove('open');
+  document.getElementById('next').textContent = 'ДАЛЬШЕ';
+  if (won) { level++; newLevel(); }
+};
+
+document.addEventListener('keydown', e => {
+  const k = e.key.toLowerCase(), code = e.code;
+  const map = { arrowleft: [-1, 0], arrowright: [1, 0], arrowup: [0, -1], arrowdown: [0, 1] };
+  const codeMap = { KeyA: [-1, 0], KeyD: [1, 0], KeyW: [0, -1], KeyS: [0, 1] };
+  const m = map[k] || codeMap[code];
+  if (!m) return;
+  e.preventDefault();
+  if (document.getElementById('ov').classList.contains('open')) { if (k === 'enter') document.getElementById('next').click(); return; }
+  move(m[0], m[1]);
+});
+document.addEventListener('keydown', e => { if (e.key === 'Enter' && document.getElementById('ov').classList.contains('open')) document.getElementById('next').click(); });
+
+newLevel();
+</script>
+</body>
+</html>

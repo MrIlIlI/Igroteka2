@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Песок и огонь</title>
+<style>
+:root { --bg:#0E1020; --panel:#181B31; --panel2:#242949; --o1:#FF7A2F; --o2:#FFB020; --text:#fff; --muted:#A3A9CC; }
+* { box-sizing:border-box; user-select:none; }
+html,body { margin:0; height:100%; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+body { display:flex; flex-direction:column; align-items:center; gap:12px; padding:14px; }
+h1 { margin:0; font-size:26px; letter-spacing:4px; text-transform:uppercase; font-weight:900;
+  background:linear-gradient(90deg,#fff,#FFE2C2,var(--o2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.bar { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; max-width:1000px; }
+.tool { font:inherit; font-size:18px; font-weight:700; color:var(--text); background:var(--panel); border:3px solid var(--panel2);
+  border-radius:12px; padding:8px 14px; cursor:pointer; display:flex; align-items:center; gap:8px; image-rendering:pixelated; }
+.tool .sw { width:18px; height:18px; border:2px solid #000; box-shadow:2px 2px 0 #000; }
+.tool.active { border-color:var(--o1); box-shadow:0 0 18px rgba(255,122,47,.5); background:var(--panel2); }
+.tool:focus-visible { outline:3px solid #fff; }
+.sizes .tool { padding:8px 12px; }
+canvas { image-rendering:pixelated; border:4px solid #000; box-shadow:0 0 0 3px var(--panel2), 0 14px 40px rgba(0,0,0,.6); cursor:crosshair;
+  max-width:100%; height:auto; background:#06070f; }
+.hint { color:var(--muted); font-size:16px; text-align:center; }
+.row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:center; }
+</style>
+</head>
+<body>
+<h1>Песок и огонь</h1>
+<div class="bar" id="tools"></div>
+<div class="row">
+  <div class="bar sizes" id="sizes"></div>
+  <button class="tool" id="pause">⏸ Пауза</button>
+  <button class="tool" id="clear">🧹 Очистить</button>
+</div>
+<canvas id="c" width="200" height="130"></canvas>
+<div class="hint">Выбери вещество и рисуй мышкой. Что будет, если вода попадёт на лаву? А если семечко упадёт на мокрый песок?</div>
+<script>
+const W = 200, H = 130;
+const cv = document.getElementById('c');
+cv.style.width = (W * 4) + 'px';
+const ctx = cv.getContext('2d');
+const img = ctx.createImageData(W, H);
+const px = img.data;
+
+// cell types
+const E=0, SAND=1, WATER=2, STONE=3, WOOD=4, FIRE=5, LAVA=6, SEED=7, PLANT=8, STEAM=9, OIL=10, ICE=11, SMOKE=12;
+const type = new Uint8Array(W * H);
+const life = new Uint8Array(W * H);   // fire / steam / smoke lifetime, plant growth budget
+const moved = new Uint8Array(W * H);
+
+const TOOLS = [
+  { t: SAND,  name: 'Песок',   color: '#E2C36A' },
+  { t: WATER, name: 'Вода',    color: '#3A8BE0' },
+  { t: STONE, name: 'Камень',  color: '#7D7F8A' },
+  { t: WOOD,  name: 'Дерево',  color: '#8B5A2B' },
+  { t: FIRE,  name: 'Огонь',   color: '#FF6A1A' },
+  { t: LAVA,  name: 'Лава',    color: '#E8360F' },
+  { t: SEED,  name: 'Семечко', color: '#5CC43A' },
+  { t: OIL,   name: 'Масло',   color: '#5A4B2E' },
+  { t: ICE,   name: 'Лёд',     color: '#BFE9FF' },
+  { t: E,     name: 'Ластик',  color: '#06070f' }
+];
+const EMOJI = { 1:'🟨', 2:'💧', 3:'🪨', 4:'🪵', 5:'🔥', 6:'🌋', 7:'🌱', 10:'🛢️', 11:'🧊', 0:'❌' };
+
+// colours per type: base rgb and a variation
+function colorOf(t, i) {
+  const n = (i * 2654435761 >>> 0) % 23;  // stable per-cell noise
+  switch (t) {
+    case SAND:  return [214 + n, 186 + n, 90 + n];
+    case WATER: return [40, 120 + n, 220];
+    case STONE: return [110 + n, 112 + n, 122 + n];
+    case WOOD:  return [130 + n, 85, 40];
+    case FIRE:  { const f = life[i]; return f > 12 ? [255, 200, 60] : f > 6 ? [255, 120, 30] : [200, 50, 20]; }
+    case LAVA:  return [230 + (n % 2) * 20, 60 + n * 2, 10];
+    case SEED:  return [90, 190, 50];
+    case PLANT: return [40 + n, 160 + n * 2, 50];
+    case STEAM: return [200, 210, 225];
+    case OIL:   return [85, 70, 45];
+    case ICE:   return [190, 230, 255];
+    case SMOKE: return [70, 70, 80];
+    default:    return [6, 7, 15];
+  }
+}
+
+let tool = SAND, brush = 2, paused = false;
+
+function idx(x, y) { return y * W + x; }
+function get(x, y) { return (x < 0 || x >= W || y < 0 || y >= H) ? STONE : type[idx(x, y)]; }
+function set(x, y, t, l) { const i = idx(x, y); type[i] = t; life[i] = l || 0; moved[i] = 1; }
+function swap(a, b) {
+  const t = type[a], l = life[a];
+  type[a] = type[b]; life[a] = life[b];
+  type[b] = t; life[b] = l;
+  moved[a] = moved[b] = 1;
+}
+function isEmptyOrGas(t) { return t === E || t === STEAM || t === SMOKE; }
+function isLiquid(t) { return t === WATER || t === OIL || t === LAVA; }
+function flammable(t) { return t === WOOD || t === PLANT || t === SEED || t === OIL; }
+const rnd = Math.random;
+
+function burnAround(x, y, chance) {
+  for (let k = 0; k < 4; k++) {
+    const nx = x + [1, -1, 0, 0][k], ny = y + [0, 0, 1, -1][k];
+    const t = get(nx, ny);
+    if (flammable(t) && rnd() < chance) set(nx, ny, FIRE, t === OIL ? 30 : 20);
+    if (t === ICE && rnd() < chance) set(nx, ny, WATER);
+  }
+}
+
+function stepCell(x, y) {
+  const i = idx(x, y);
+  if (moved[i]) return;
+  const t = type[i];
+  if (t === E || t === STONE || t === WOOD || t === ICE) {
+    if (t === ICE) { // ice freezes neighbouring water, melts near fire/lava
+      for (let k = 0; k < 4; k++) {
+        const nx = x + [1, -1, 0, 0][k], ny = y + [0, 0, 1, -1][k], n = get(nx, ny);
+        if (n === WATER && rnd() < 0.02) set(nx, ny, ICE);
+        if ((n === FIRE || n === LAVA) && rnd() < 0.3) { set(x, y, WATER); return; }
+      }
+    }
+    return;
+  }
+  const below = get(x, y + 1), bi = idx(x, y + 1);
+  const dir = rnd() < 0.5 ? 1 : -1;
+
+  if (t === SAND || t === SEED) {
+    if (isEmptyOrGas(below) || isLiquid(below) && below !== LAVA) { swap(i, bi); return; }
+    if (t === SEED) {
+      if (below === LAVA || below === FIRE) { set(x, y, FIRE, 10); return; }
+      // sprout when resting next to water or wet ground
+      let wet = false;
+      for (let k = 0; k < 4; k++) if (get(x + [1,-1,0,0][k], y + [0,0,1,-1][k]) === WATER) wet = true;
+      if (wet && rnd() < 0.05 || rnd() < 0.0015) { set(x, y, PLANT, 6 + (rnd() * 10 | 0)); return; }
+    }
+    if (below === LAVA) { set(x, y, STONE); return; }
+    const dx = x + dir;
+    if (isEmptyOrGas(get(dx, y + 1)) && isEmptyOrGas(get(dx, y))) { swap(i, idx(dx, y + 1)); return; }
+    return;
+  }
+
+  if (t === PLANT) {
+    // grow upward while budget lasts
+    if (life[i] > 0 && rnd() < 0.08) {
+      const up = get(x, y - 1);
+      if (up === E) { set(x, y - 1, PLANT, life[i] - 1); life[i] = 0; }
+      else if (rnd() < 0.3) { const sx = x + dir; if (get(sx, y - 1) === E) { set(sx, y - 1, PLANT, life[i] - 2); life[i] = 0; } }
+    }
+    for (let k = 0; k < 4; k++) {
+      const n = get(x + [1,-1,0,0][k], y + [0,0,1,-1][k]);
+      if ((n === FIRE || n === LAVA) && rnd() < 0.2) { set(x, y, FIRE, 14); return; }
+    }
+    return;
+  }
+
+  if (t === WATER || t === OIL) {
+    // interactions
+    for (let k = 0; k < 4; k++) {
+      const nx = x + [1,-1,0,0][k], ny = y + [0,0,1,-1][k], n = get(nx, ny);
+      if (t === WATER) {
+        if (n === FIRE) { set(nx, ny, STEAM, 40); set(x, y, STEAM, 60); return; }
+        if (n === LAVA) { set(nx, ny, STONE); set(x, y, STEAM, 60); return; }
+      } else {
+        if (n === FIRE || n === LAVA) { set(x, y, FIRE, 30); return; }
+      }
+    }
+    if (isEmptyOrGas(below)) { swap(i, bi); return; }
+    if (t === WATER && get(x, y - 1) === OIL) { swap(i, idx(x, y - 1)); return; }   // oil floats on water
+    if (isEmptyOrGas(get(x + dir, y + 1))) { swap(i, idx(x + dir, y + 1)); return; }
+    if (isEmptyOrGas(get(x + dir, y))) { swap(i, idx(x + dir, y)); return; }
+    if (isEmptyOrGas(get(x - dir, y))) { swap(i, idx(x - dir, y)); return; }
+    return;
+  }
+
+  if (t === LAVA) {
+    burnAround(x, y, 0.15);
+    if (isEmptyOrGas(below)) { if (rnd() < 0.6) swap(i, bi); return; }
+    if (below === WATER) { set(x, y, STONE); set(x, y + 1, STEAM, 60); return; }
+    if (rnd() < 0.35) {
+      if (isEmptyOrGas(get(x + dir, y + 1))) { swap(i, idx(x + dir, y + 1)); return; }
+      if (isEmptyOrGas(get(x + dir, y))) { swap(i, idx(x + dir, y)); return; }
+    }
+    if (rnd() < 0.002) { if (get(x, y - 1) === E) set(x, y - 1, SMOKE, 40); }
+    return;
+  }
+
+  if (t === FIRE) {
+    if (life[i] === 0) { set(x, y, rnd() < 0.3 ? SMOKE : E, 30); return; }
+    life[i]--;
+    burnAround(x, y, 0.12);
+    // flicker upward
+    if (rnd() < 0.5 && get(x, y - 1) === E) { swap(i, idx(x, y - 1)); return; }
+    if (rnd() < 0.2 && get(x + dir, y - 1) === E) { swap(i, idx(x + dir, y - 1)); return; }
+    return;
+  }
+
+  if (t === STEAM || t === SMOKE) {
+    if (life[i] === 0) {
+      if (t === STEAM && rnd() < 0.5 && y > 0) set(x, y, WATER); else set(x, y, E);
+      return;
+    }
+    life[i]--;
+    const up = get(x, y - 1);
+    if (up === E && rnd() < 0.8) { swap(i, idx(x, y - 1)); return; }
+    if (get(x + dir, y) === E && rnd() < 0.5) { swap(i, idx(x + dir, y)); return; }
+    if (t === STEAM && (up === STONE || up === ICE || up === WOOD) && rnd() < 0.02) { set(x, y, WATER); return; }
+    return;
+  }
+}
+
+function step() {
+  moved.fill(0);
+  for (let y = H - 1; y >= 0; y--) {
+    if (rnd() < 0.5) { for (let x = 0; x < W; x++) stepCell(x, y); }
+    else { for (let x = W - 1; x >= 0; x--) stepCell(x, y); }
+  }
+}
+
+function draw() {
+  for (let i = 0; i < W * H; i++) {
+    const c = colorOf(type[i], i);
+    px[i * 4] = c[0]; px[i * 4 + 1] = c[1]; px[i * 4 + 2] = c[2]; px[i * 4 + 3] = 255;
+  }
+  ctx.putImageData(img, 0, 0);
+}
+
+// painting
+let painting = false, lastX = -1, lastY = -1;
+function cellFromEvent(e) {
+  const r = cv.getBoundingClientRect();
+  return [Math.floor((e.clientX - r.left) / r.width * W), Math.floor((e.clientY - r.top) / r.height * H)];
+}
+function paint(cx, cy) {
+  const rr = brush;
+  for (let dy = -rr; dy <= rr; dy++) for (let dx = -rr; dx <= rr; dx++) {
+    if (dx * dx + dy * dy > rr * rr + 0.5) continue;
+    const x = cx + dx, y = cy + dy;
+    if (x < 0 || x >= W || y < 0 || y >= H) continue;
+    const cur = type[idx(x, y)];
+    if (tool === E || cur === E || (tool === FIRE && flammable(cur))) {
+      type[idx(x, y)] = tool;
+      life[idx(x, y)] = tool === FIRE ? 20 : 0;
+    }
+  }
+}
+function line(x0, y0, x1, y1) {
+  const n = Math.max(Math.abs(x1 - x0), Math.abs(y1 - y0), 1);
+  for (let k = 0; k <= n; k++) paint(Math.round(x0 + (x1 - x0) * k / n), Math.round(y0 + (y1 - y0) * k / n));
+}
+cv.addEventListener('pointerdown', e => { painting = true; const [x, y] = cellFromEvent(e); lastX = x; lastY = y; paint(x, y); cv.setPointerCapture(e.pointerId); });
+cv.addEventListener('pointermove', e => { if (!painting) return; const [x, y] = cellFromEvent(e); line(lastX, lastY, x, y); lastX = x; lastY = y; });
+cv.addEventListener('pointerup', () => painting = false);
+cv.addEventListener('pointercancel', () => painting = false);
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+// toolbar
+const toolsEl = document.getElementById('tools');
+TOOLS.forEach(d => {
+  const b = document.createElement('button');
+  b.className = 'tool' + (d.t === tool ? ' active' : '');
+  b.innerHTML = `<span class="sw" style="background:${d.color}"></span>${EMOJI[d.t]} ${d.name}`;
+  b.onclick = () => { tool = d.t; [...toolsEl.children].forEach(c => c.classList.remove('active')); b.classList.add('active'); };
+  toolsEl.appendChild(b);
+});
+const sizesEl = document.getElementById('sizes');
+[[1, '●'], [2, '●●'], [4, '●●●']].forEach(([r, label]) => {
+  const b = document.createElement('button');
+  b.className = 'tool' + (r === brush ? ' active' : '');
+  b.textContent = label;
+  b.title = 'Размер кисти';
+  b.onclick = () => { brush = r; [...sizesEl.children].forEach(c => c.classList.remove('active')); b.classList.add('active'); };
+  sizesEl.appendChild(b);
+});
+const pauseBtn = document.getElementById('pause');
+pauseBtn.onclick = () => { paused = !paused; pauseBtn.textContent = paused ? '▶ Дальше' : '⏸ Пауза'; };
+document.getElementById('clear').onclick = () => { type.fill(E); life.fill(0); };
+document.addEventListener('keydown', e => {
+  if (e.key === ' ') { e.preventDefault(); pauseBtn.click(); }
+  const n = parseInt(e.key, 10);
+  if (n >= 1 && n <= TOOLS.length) toolsEl.children[n - 1].click();
+});
+
+// starting scene: a stone floor, a sand hill, a pool, a tree
+for (let x = 0; x < W; x++) type[idx(x, H - 1)] = STONE;
+for (let x = 20; x < 70; x++) for (let y = H - 2; y > H - 2 - Math.max(0, 25 - Math.abs(x - 45)); y--) type[idx(x, y)] = SAND;
+for (let x = 120; x < 160; x++) for (let y = H - 2; y > H - 14; y--) type[idx(x, y)] = WATER;
+for (let x = 118; x < 162; x++) type[idx(x, H - 2)] = STONE;
+for (let y = H - 2; y > H - 22; y--) type[idx(95, y)] = WOOD, type[idx(96, y)] = WOOD;
+for (let x = 88; x < 104; x++) for (let y = H - 22; y > H - 30; y--) if ((x - 96) * (x - 96) + (y - (H - 26)) * (y - (H - 26)) < 40) type[idx(x, y)] = PLANT;
+
+function frame() {
+  if (!paused) { step(); step(); }
+  draw();
+  requestAnimationFrame(frame);
+}
+frame();
+</script>
+</body>
+</html>

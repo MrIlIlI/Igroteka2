@@ -1,0 +1,1970 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Плыг-Па-Па!</title>
+<style>
+  :root { padding: 0 !important; } /* the game reads env(safe-area-inset-*) itself and keeps its UI clear of the notch */
+  html, body { height: 100%; margin: 0; overflow: hidden; background: #8FD3FF;
+    touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none;
+    overscroll-behavior: none; -webkit-tap-highlight-color: transparent; }
+  canvas { display: block; touch-action: none; outline: none; }
+</style>
+<canvas id="c" tabindex="0"></canvas>
+<script>
+(function () {
+'use strict';
+/* =====================================================================
+   Плыг-Па-Па! — a toddler whack-a-mole where the hero jumps where you tap.
+   Storybook pastel art style: thick plum outlines, cream highlights,
+   round jelly creatures with big shiny eyes.
+   ===================================================================== */
+var canvas = document.getElementById('c');
+var ctx = canvas.getContext('2d');
+
+// ---------- small helpers -------------------------------------------------
+var TAU = Math.PI * 2, DEG = Math.PI / 180;
+function clamp(v, a, b) { return v < a ? a : v > b ? b : v; }
+function lerp(a, b, t) { return a + (b - a) * t; }
+function rnd(a, b) { return a + Math.random() * (b - a); }
+function pick(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function dist(ax, ay, bx, by) { var dx = bx - ax, dy = by - ay; return Math.sqrt(dx * dx + dy * dy); }
+function easeOut(t) { return 1 - (1 - t) * (1 - t); }
+function easeIn(t) { return t * t; }
+function smooth(t) { return t * t * (3 - 2 * t); }
+var store = {
+  get: function (k, d) { try { var v = localStorage.getItem(k); return v == null ? d : JSON.parse(v); } catch (e) { return d; } },
+  set: function (k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch (e) {} }
+};
+var PLUM = '#3B2A4A', CREAM = '#FFF6E5';
+var CRE_COLORS = ['#9DF2D6', '#C8A8FF', '#FFB36B', '#8FD3FF', '#FFA6C9'];
+var CONFETTI = ['#FF5E7A', '#FFD166', '#06D6A0', '#4CC9F0', '#B388FF', '#FF9F1C'];
+var PENTA = [0, 2, 4, 7, 9, 12, 14, 16];
+var FONT = 'system-ui,-apple-system,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif';
+function font(size, weight) { return (weight || 900) + ' ' + Math.round(size) + 'px ' + FONT; }
+function circle(x, y, r) { ctx.beginPath(); ctx.arc(x, y, r, 0, TAU); }
+function ellipse(x, y, rx, ry, rot) { ctx.beginPath(); ctx.ellipse(x, y, Math.max(0.1, rx), Math.max(0.1, ry), rot || 0, 0, TAU); }
+function rrect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.beginPath(); ctx.moveTo(x + r, y); ctx.lineTo(x + w - r, y); ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+  ctx.lineTo(x + w, y + h - r); ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h); ctx.lineTo(x + r, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - r); ctx.lineTo(x, y + r); ctx.quadraticCurveTo(x, y, x + r, y); ctx.closePath();
+}
+function star(x, y, R, n, inner, rot) {
+  ctx.beginPath();
+  for (var i = 0; i < n * 2; i++) {
+    var a = (rot || 0) - Math.PI / 2 + i * Math.PI / n, r = (i % 2) ? R * inner : R;
+    var px = x + Math.cos(a) * r, py = y + Math.sin(a) * r;
+    if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+  }
+  ctx.closePath();
+}
+function fillStroke(fill, stroke, lw) {
+  ctx.fillStyle = fill; ctx.fill();
+  if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = lw; ctx.stroke(); }
+}
+function strokeFillText(s, x, y, color, lw) {
+  ctx.lineJoin = 'round'; ctx.lineWidth = lw; ctx.strokeStyle = PLUM; ctx.strokeText(s, x, y);
+  ctx.fillStyle = color; ctx.fillText(s, x, y);
+}
+
+// ---------- layout ----------------------------------------------------------
+var L = { W: 300, H: 300, U: 300, S: 0.5, K: 1, pk: 0, dpr: 1, ground: 246, holes: [], safe: { t: 0, r: 0, b: 0, l: 0 },
+  heroH: 56, creW: 36, holeRx: 20, holeRy: 8, muteX: 0, muteY: 0, starY: 0, starSize: 16, albumY: 0 };
+var safeProbe = null;
+function readSafe() {
+  try {
+    if (!safeProbe) {
+      safeProbe = document.createElement('div');
+      safeProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;' +
+        'padding:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)';
+      document.body.appendChild(safeProbe);
+    }
+    var cs = getComputedStyle(safeProbe);
+    L.safe.t = parseFloat(cs.paddingTop) || 0; L.safe.r = parseFloat(cs.paddingRight) || 0;
+    L.safe.b = parseFloat(cs.paddingBottom) || 0; L.safe.l = parseFloat(cs.paddingLeft) || 0;
+  } catch (e) {}
+}
+var BG = {}, BGQ = []; // cached background layers per scene + build queue (one per frame)
+function layout() {
+  var oldW = L.W, oldH = L.H, oldGround = L.ground, oldN = L.holes.length;
+  var W = Math.max(120, Math.round(window.innerWidth || document.documentElement.clientWidth || 300));
+  var H = Math.max(120, Math.round(window.innerHeight || document.documentElement.clientHeight || 300));
+  L.W = W; L.H = H; L.U = Math.min(W, H); L.S = L.U / 600;
+  L.dpr = Math.min(2, window.devicePixelRatio || 1);
+  if (W * H * L.dpr * L.dpr > 4.5e6) L.dpr = Math.min(L.dpr, 1.5); // only the very largest screens (12.9" iPad Pro, retina laptops) drop to 1.5x
+  canvas.width = Math.round(W * L.dpr); canvas.height = Math.round(H * L.dpr);
+  canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+  readSafe();
+  L.ground = Math.round(0.82 * H);
+  // portrait boost: on a tall phone U = width is small, so the actors grow up to 1.5x (hole count shrinks to match);
+  // L.pk (0 = landscape .. 1 = phone portrait) also lifts the hills, lowers the cloud band and enlarges the sun
+  L.K = clamp((H / W) / 1.3, 1, H / W > 1.5 ? 1.5 : 1.4);
+  L.pk = clamp((L.K - 1) / 0.5, 0, 1);
+  L.heroH = clamp(0.16 * L.U * L.K, 56, 150);
+  L.creW = 0.12 * L.U * L.K;
+  var n = clamp(Math.floor(W / (0.16 * L.U * L.K)), 4, 9);
+  var margin = W * 0.07, span = W - 2 * margin;
+  L.holeRx = Math.min(0.075 * L.U * L.K, 0.42 * span / n); L.holeRy = L.holeRx * 0.35; // holes never overlap
+  FLSPR = {}; // flower sprites depend on U and dpr
+  L.holes = [];
+  for (var i = 0; i < n; i++) L.holes.push({ x: margin + span * (i + 0.5) / n, y: L.ground });
+  L.muteX = W - L.safe.r - 12 - 22; L.muteY = L.safe.t + 12 + 22;
+  L.starY = L.safe.t + 0.03 * H + 0.02 * H;
+  L.starSize = Math.min(0.045 * H, (W - 2 * (Math.max(L.safe.l, L.safe.r) + 72)) / 14);
+  L.albumY = H - L.safe.b - 0.045 * L.U;
+  // every cached pixel depends on W/H/dpr: release the old canvases (Safari frees them lazily otherwise) and rebuild
+  // lazily: only the current scene now (one per frame, see frame()), the next scene once the kid is near its 25th bonk
+  releaseBg(); gradCache = {}; SUNSPR = {}; TXTW = {};
+  if (typeof G !== 'undefined') BGQ = [G.scene];
+  remapWorld(W / oldW, H / oldH, oldGround, oldN);
+}
+function releaseBg() { for (var k in BG) { try { BG[k].width = BG[k].height = 0; } catch (e) {} } BG = {}; BGQ = []; }
+// after a resize / rotation every actor keeps its proportional place: an in-flight jump keeps its arc in the new space,
+// conga blobs keep their spacing, holes are remapped so that no two creatures share one and none ends up under the hero
+// (the same heroOnHole() rule spawning uses): a clashing creature moves to the nearest free hole, or sinks if there is none
+function remapWorld(kx, ky, oldGround, oldN) {
+  if (typeof hero === 'undefined' || typeof G === 'undefined') return;
+  var n = L.holes.length, i, c, onG = function (y) { return y >= oldGround - 1 ? L.ground : y * ky; };
+  hero.x = heroClampX(hero.x * kx);
+  if (hero.air) hero.y = onG(hero.y); else if (!hero.stack) hero.y = L.ground;
+  var j = hero.jump;
+  if (j) { j.sx *= kx; j.sy = onG(j.sy); j.tx = heroClampX(j.tx * kx); j.ty = onG(j.ty); j.blend = null; }
+  if (G.boom) { G.boom.sx = heroClampX(G.boom.sx * kx); G.boom.sy = onG(G.boom.sy); }
+  if (G.trans) { var tr = G.trans; if (tr.hx != null) tr.hx *= kx; for (i = 0; i < tr.conga.length; i++) tr.conga[i].x *= kx; }
+  G.lastLand = { x: heroClampX(G.lastLand.x * kx), y: L.ground };
+  if (G.butterfly) { G.butterfly.x *= kx; G.butterfly.y *= ky; }
+  for (i = 0; i < G.floaters.length; i++) G.floaters[i].x *= kx;
+  var rh = function (h) { return clamp(Math.round(h * (n - 1) / Math.max(1, oldN - 1)), 0, n - 1); }; // proportional hole index
+  for (i = 0; i < SPAWNQ.length; i++) if (SPAWNQ[i].hole != null) SPAWNQ[i].hole = rh(SPAWNQ[i].hole); // queued pops keep a valid hole
+  if (G.intro && G.intro.hole != null) G.intro.hole = rh(G.intro.hole);
+  // holes: the stack she sits on first (she stays on it), then everyone else
+  var order = CRE.slice().sort(function (a, b) { return (b === hero.stack ? 1 : 0) - (a === hero.stack ? 1 : 0); }), taken = {};
+  for (i = 0; i < order.length; i++) {
+    c = order[i]; if (c.hole == null || c.cloud || c.state === 'fly' || c.state === 'gone') continue;
+    var h = rh(c.hole);
+    if (isLive(c) && c !== hero.stack && (taken[h] || heroOnHole(h))) {
+      var alt = null, bd = 1e9;
+      for (var k = 0; k < n; k++) if (!taken[k] && !heroOnHole(k)) { var d = Math.abs(k - h); if (d < bd) { bd = d; alt = k; } }
+      if (alt != null) h = alt; else { c.state = 'sink'; c.t = 0; c.claimed = false; }
+    }
+    c.hole = h; taken[h] = true; c.hop = null; placeCreature(c);
+  }
+  if (hero.stack && hero.stack.hole != null) hero.x = L.holes[hero.stack.hole].x;
+  // cloud riders: the cloud band moves with the orientation, so a rider that now sits under the star row / counter
+  // (the rule spawnCloud() uses) hops to another eligible cloud, or sinks when there is none
+  var minTop = L.starY + L.starSize * 2.6 + creH({ size: 1 }) * 1.3;
+  for (i = 0; i < CLOUDS.length; i++) cloudPos(CLOUDS[i]);
+  for (i = 0; i < CLOUDS.length; i++) {
+    var cl = CLOUDS[i], r = cl.rider; if (!r || cl.top >= minTop) continue;
+    var cands = CLOUDS.filter(function (o) { return !o.rider && o.x > 0.12 * L.W && o.x < 0.75 * L.W && o.top > minTop; });
+    cl.rider = null;
+    if (cands.length && isLive(r)) { var to = pick(cands); to.rider = r; r.cloud = to; placeCreature(r); }
+    else if (r.state !== 'fly' && r.state !== 'gone') { r.state = 'sink'; r.t = 0; r.claimed = false; cl.rider = r; }
+  }
+}
+var resizeTimer = null;
+function onResize() { if (resizeTimer) clearTimeout(resizeTimer); resizeTimer = setTimeout(function () { resizeTimer = null; layout(); }, 100); }
+window.addEventListener('resize', onResize);
+window.addEventListener('orientationchange', onResize);
+if (window.visualViewport) window.visualViewport.addEventListener('resize', onResize);
+
+// ---------- audio engine (Web Audio, all synthesized) ------------------------
+var A = { ctx: null, ok: false, failed: false, master: null, sfx: null, music: null, noise: null,
+  voices: [], log: [], depth: 0, paid: true, muted: !!store.get('plyg.mute', false), unlocked: false, fsTried: false };
+function audioInit() {
+  if (A.ctx || A.failed) return;
+  try {
+    var C = window.AudioContext || window.webkitAudioContext;
+    if (!C) { A.failed = true; return; }
+    var c = new C(); A.ctx = c;
+    var comp = c.createDynamicsCompressor();
+    comp.threshold.value = -14; comp.ratio.value = 4; comp.connect(c.destination);
+    A.master = c.createGain(); A.master.gain.value = A.muted ? 0 : 0.8; A.master.connect(comp);
+    A.sfx = c.createGain(); A.sfx.gain.value = 0.9; A.sfx.connect(A.master);
+    A.music = c.createGain(); A.music.gain.value = 0.18; A.music.connect(A.master);
+    var n = Math.floor(c.sampleRate), buf = c.createBuffer(1, n, c.sampleRate), d = buf.getChannelData(0);
+    for (var i = 0; i < n; i++) d[i] = Math.random() * 2 - 1;
+    A.noise = buf; A.ok = true;
+  } catch (e) { A.failed = true; A.ok = false; }
+}
+function audioResume() {
+  if (!A.ok) return;
+  try { if (A.ctx.state !== 'running') { var p = A.ctx.resume(); if (p && p.catch) p.catch(function () {}); } } catch (e) {}
+}
+function gestureActive() { try { var ua = navigator.userActivation; return ua ? ua.isActive : true; } catch (e) { return true; } }
+// Called from every input handler (pointerdown AND pointerup/touchend/keydown). For a touch, Chromium only
+// grants user activation on pointerup, so the context is created on the up-edge of the first tap; the
+// music loop is started here as soon as the context exists, so a late unlock never leaves the game silent.
+function audioUnlock() {
+  if (!A.ctx && !gestureActive()) return; // wait for a real activation (avoids autoplay warnings)
+  audioInit(); if (!A.ok) return; if (gestureActive()) audioResume();
+  if (!A.unlocked) {
+    A.unlocked = true;
+    try { var b = A.ctx.createBuffer(1, 1, 22050), s = A.ctx.createBufferSource(); s.buffer = b; s.connect(A.ctx.destination); s.start(0); } catch (e) {}
+  }
+  if (G.state === 'play' && !MUSIC.timer) musicStart();
+}
+// Voice budget: one SFX recipe = one voice (all its partials share the slot). Max 12 concurrent recipes and
+// 30 recipes/s; decorative sounds (prio 0/1) are dropped when saturated, climax sounds (prio 2) never are:
+// they evict the oldest low-priority slot instead. Music is exempt (o.music).
+var SFX_PRIO = { pa: 2, drumfill: 2, bum: 2, bigboom: 2, rowFull: 2, ura: 2, ding: 2, hlop: 1, boing: 1, hop: 1, bu: 1, din: 1, hlyup: 1, shlep: 1, yawn: 1, nya: 0, fly: 0, giggle: 0, tik: 0 };
+var SFX_DUR = { pa: 0.15, drumfill: 0.8, bum: 0.12, bigboom: 0.3, rowFull: 0.45, ura: 0.55, ding: 0.85, hlop: 0.1, boing: 0.13, hop: 0.07, bu: 0.1, din: 0.15, hlyup: 0.1, shlep: 0.1, yawn: 0.6, nya: 0.17, fly: 0.4, giggle: 0.3, tik: 0.03 };
+function takeVoice(name) {
+  var now = performance.now(), lg = A.log, vs = A.voices, prio = SFX_PRIO[name] || 1;
+  while (lg.length && lg[0] < now - 1000) lg.shift();
+  for (var i = vs.length - 1; i >= 0; i--) if (vs[i].end <= now) vs.splice(i, 1);
+  if (lg.length >= 30 || vs.length >= 12) {
+    if (prio < 2) return false;
+    for (var k = 0; k < vs.length; k++) if (vs[k].prio < 2) { vs.splice(k, 1); break; }
+  }
+  lg.push(now); vs.push({ end: now + (SFX_DUR[name] || 0.4) * 1000, prio: prio });
+  return true;
+}
+function budget() { return A.depth > 0 ? A.paid : takeVoice('misc'); }
+function envGain(g, t, gain, attack, dur) {
+  g.gain.setValueAtTime(0.0001, t);
+  g.gain.linearRampToValueAtTime(gain, t + attack);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+}
+// tone(type, f0, f1, dur, gain, attack, opts{delay,curve:[[f,t]],vib:[rate,depth],lp,music})
+function tone(type, f0, f1, dur, gain, attack, o) {
+  if (!A.ok) return; o = o || {};
+  if (!o.music && !budget()) return;
+  try {
+    var c = A.ctx, t = c.currentTime + Math.max(0, o.delay || 0);
+    var osc = c.createOscillator(); osc.type = type;
+    osc.frequency.setValueAtTime(Math.max(1, f0), t);
+    if (o.curve) { for (var i = 0; i < o.curve.length; i++) osc.frequency.exponentialRampToValueAtTime(Math.max(1, o.curve[i][0]), t + o.curve[i][1]); }
+    else if (f1 !== f0) osc.frequency.exponentialRampToValueAtTime(Math.max(1, f1), t + dur);
+    var g = c.createGain(); envGain(g, t, gain, attack || 0.003, dur);
+    var last = osc;
+    if (o.lp) { var f = c.createBiquadFilter(); f.type = 'lowpass'; f.frequency.value = o.lp; osc.connect(f); last = f; }
+    last.connect(g); g.connect(o.music ? A.music : A.sfx);
+    if (o.vib) {
+      var l = c.createOscillator(), lg = c.createGain();
+      l.frequency.value = o.vib[0]; lg.gain.value = o.vib[1];
+      l.connect(lg); lg.connect(osc.frequency); l.start(t); l.stop(t + dur + 0.05);
+    }
+    osc.start(t); osc.stop(t + dur + 0.05);
+  } catch (e) {}
+}
+function noise(dur, type, freq, q, gain, o) {
+  if (!A.ok) return; o = o || {};
+  if (!o.music && !budget()) return;
+  try {
+    var c = A.ctx, t = c.currentTime + Math.max(0, o.delay || 0);
+    var s = c.createBufferSource(); s.buffer = A.noise;
+    var f = c.createBiquadFilter(); f.type = type; f.frequency.value = freq; f.Q.value = q;
+    var g = c.createGain(); envGain(g, t, gain, o.attack || 0.002, dur);
+    s.connect(f); f.connect(g); g.connect(o.music ? A.music : A.sfx);
+    s.start(t, Math.random() * 0.5); s.stop(t + dur + 0.05);
+  } catch (e) {}
+}
+function duck() {
+  if (!A.ok) return;
+  try { var g = A.music.gain, t = A.ctx.currentTime; g.cancelScheduledValues(t); g.setValueAtTime(0.072, t); g.linearRampToValueAtTime(0.18, t + 0.3); } catch (e) {}
+}
+function semi(n) { return Math.pow(2, n / 12); }
+function midi(n) { return 440 * Math.pow(2, (n - 69) / 12); }
+var SFX = {
+  pa: function (step, combo) {
+    var k = semi(step), kv = Math.pow(k, 0.3);
+    tone('sine', 220, 60, 0.09, 0.9);
+    noise(0.025, 'bandpass', 1200, 1, 0.6);
+    tone('sine', 650 * kv, 650 * kv, 0.07, 0.5);
+    tone('sine', 1100 * kv, 1100 * kv, 0.07, 0.5);
+    tone('triangle', 262 * k, 262 * k, 0.12, 0.35, 0.003);
+    tone('sine', 1800, 1400, 0.12, 0.2, 0.003, { curve: [[2600, 0.06], [1400, 0.12]] });
+    if (combo >= 3) noise(0.12, 'highpass', 6000, 0.7, 0.15);
+    duck();
+  },
+  boing: function (st) { var k = semi(st || 0); tone('sine', 300 * k, 700 * k, 0.12, 0.35); tone('sine', 303 * k, 707 * k, 0.12, 0.1, 0.003, { vib: [6, 8] }); },
+  hop: function () { tone('sine', 400, 600, 0.07, 0.25); },
+  bum: function () { tone('sine', 90, 35, 0.11, 0.5); noise(0.03, 'lowpass', 400, 1, 0.4); },
+  bu: function (m) { m = m || 1; tone('triangle', 380 * m, 300 * m, 0.09, 0.3); },
+  nya: function () { tone('triangle', 520, 520, 0.07, 0.2); tone('triangle', 440, 440, 0.07, 0.2, 0.003, { delay: 0.09 }); },
+  fly: function () { tone('sine', 600, 1800, 0.4, 0.2, 0.005, { vib: [7, 30] }); },
+  giggle: function () { for (var i = 0; i < 4; i++) tone('triangle', i % 2 ? 1200 : 900, i % 2 ? 1200 : 900, 0.05, 0.15, 0.003, { delay: i * 0.07 }); },
+  din: function (n) { var f = 523.25 * semi(PENTA[n % 8]); tone('triangle', f, f, 0.15, 0.25); },
+  tik: function () { tone('sine', 900, 900, 0.025, 0.15); },
+  hlyup: function () { noise(0.06, 'lowpass', 500, 1, 0.3); tone('sine', 250, 120, 0.08, 0.3); },
+  shlep: function () { noise(0.08, 'lowpass', 800, 1, 0.5); tone('sine', 180, 80, 0.1, 0.4); },
+  drumfill: function () {
+    for (var i = 0; i < 3; i++) tone('sine', 150, 45, 0.08, 0.6, 0.002, { delay: i * 0.09 });
+    noise(0.08, 'bandpass', 1800, 0.8, 0.4, { delay: 0.27 }); tone('sine', 200, 200, 0.08, 0.3, 0.002, { delay: 0.27 });
+    noise(0.5, 'highpass', 5000, 0.7, 0.25, { delay: 0.3 });
+    var ch = [262, 330, 392];
+    for (var j = 0; j < 3; j++) tone('sawtooth', ch[j], ch[j], 0.25, 0.12, 0.005, { delay: 0.3, lp: 1200 });
+  },
+  bigboom: function () { tone('sine', 80, 20, 0.3, 0.7); noise(0.2, 'lowpass', 300, 1, 0.5); },
+  ura: function () {
+    var chords = [[523, 659, 784], [587, 784, 880], [659, 784, 1047]];
+    for (var i = 0; i < 3; i++) for (var j = 0; j < 3; j++) tone('triangle', chords[i][j], chords[i][j], 0.18, 0.12, 0.005, { delay: i * 0.18 });
+  },
+  rowFull: function () { var n = [523, 659, 784, 1047]; for (var i = 0; i < 4; i++) tone('triangle', n[i], n[i], 0.2, 0.25, 0.003, { delay: i * 0.08 }); },
+  ding: function () { for (var i = 0; i < 4; i++) tone('sine', 1760, 1760, 0.3, 0.3 / (i + 1), 0.003, { delay: i * 0.18 }); },
+  hlop: function () { noise(0.01, 'bandpass', 2000, 0.5, 0.6); tone('sine', 900, 300, 0.1, 0.3); },
+  yawn: function () { tone('triangle', 330, 220, 0.6, 0.15, 0.1); }
+};
+// wrap every recipe so it pays for exactly one voice slot (see takeVoice)
+Object.keys(SFX).forEach(function (name) {
+  var fn = SFX[name];
+  SFX[name] = function () {
+    if (!A.ok) return;
+    A.depth++; A.paid = takeVoice(name);
+    try { fn.apply(null, arguments); } catch (e) {}
+    A.depth--;
+  };
+});
+// music: 2-bar loop, 112 BPM, C pentatonic, lookahead scheduler
+var MUSIC = { timer: null, next: 0, step: 0 };
+var BASS = [36, 36, 43, 43, 45, 45, 41, 41];
+var MEL = [
+  [72, 74, 76, 79, null, 76, 74, 72, 79, 81, 79, 76, null, 74, 76, null],
+  [76, null, 79, 76, 81, null, 79, 76, 72, null, 74, 76, 79, null, 76, null],
+  [72, null, null, 76, null, null, 79, null, 81, null, null, 79, null, null, 76, null],
+  [79, 81, 84, 81, 79, 76, 79, 81, 84, 86, 84, 81, 79, 81, 76, 74]
+];
+function musicStart() {
+  if (!A.ok || MUSIC.timer) return;
+  MUSIC.next = A.ctx.currentTime + 0.05; MUSIC.step = 0;
+  MUSIC.timer = setInterval(musicTick, 100);
+}
+function musicTick() {
+  if (!A.ok) return;
+  try {
+    var c = A.ctx;
+    if (c.state !== 'running') { MUSIC.next = c.currentTime + 0.05; return; }
+    var sc = G.scene, tempo = [1, 1, 1.35, 0.85][sc], e8 = (60 / 112) / 2 * tempo, guard = 0;
+    if (MUSIC.next < c.currentTime - 0.3) MUSIC.next = c.currentTime + 0.02;
+    while (MUSIC.next < c.currentTime + 0.25 && guard++ < 8) {
+      var s = MUSIC.step, t = MUSIC.next, tt = t;
+      if (sc === 1 && (s & 1)) tt += e8 * 0.33;
+      if (s % 2 === 0) { var fb = midi(BASS[s / 2]); tone('triangle', fb, fb, e8 * 1.6, 0.5, 0.01, { music: true, delay: t - c.currentTime }); }
+      var m = MEL[sc][s];
+      if (m != null) { var fm = midi(m); tone('sine', fm, fm, e8 * 1.3, 0.35, 0.004, { music: true, delay: tt - c.currentTime }); }
+      noise(0.03, 'highpass', 7000, 0.7, sc === 2 ? 0.03 : 0.06, { music: true, delay: tt - c.currentTime });
+      if (sc === 2 && s === 0) { var pad = [60, 64, 67]; for (var i = 0; i < 3; i++) tone('sine', midi(pad[i]), midi(pad[i]), e8 * 16, 0.12, 0.5, { music: true, delay: t - c.currentTime }); }
+      MUSIC.next += e8; MUSIC.step = (s + 1) % 16;
+    }
+  } catch (e) {}
+}
+function toggleMute() {
+  A.muted = !A.muted; store.set('plyg.mute', A.muted);
+  if (A.master) { try { A.master.gain.value = A.muted ? 0 : 0.8; } catch (e) {} }
+}
+function speak(s) {
+  try {
+    if (A.muted || !window.speechSynthesis || !window.SpeechSynthesisUtterance) return;
+    var voices = speechSynthesis.getVoices(), v = null;
+    for (var i = 0; i < voices.length; i++) if ((voices[i].lang || '').indexOf('ru') === 0) { v = voices[i]; break; }
+    if (!v) return;
+    var u = new SpeechSynthesisUtterance(s); u.voice = v; u.lang = v.lang; u.rate = 1.1; u.pitch = 1.4;
+    speechSynthesis.speak(u);
+  } catch (e) {}
+}
+
+// ---------- game state --------------------------------------------------------
+var G = { state: 'start', bonks: 0, combo: 0, stars: 0, scene: 0, time: 0, pt: 0,
+  lastBonkT: -99, last3T: 0, lastJumpT: -1, pending: null, hitStop: 0, afterStop: [],
+  shakeAmp: 0, shakeT: 0, zoom: 1, boomCd: 0, boom: null, intro: null, celeb: null, trans: null,
+  tapsSinceBonk: 0, magnet: 0.26, lastLand: { x: 0, y: 0 }, rainbow: null, hand: null, idleT: 0,
+  spawnT: 1.2, cycle: 0, lastTripletCycle: -9, comeT: -99, sceneBonks: 0, transPending: 0, transReqT: 0, transDoneT: -99,
+  bossPending: false, boomQ: [], bowSparkle: 0, ripple: 0, starPop: [], slideHop: 0, floaters: [],
+  album: store.get('plyg.album', []), cos: store.get('plyg.cos', {}), colorIdx: 0, butterfly: null };
+if (!Array.isArray(G.album)) G.album = [];
+if (!G.cos || typeof G.cos !== 'object') G.cos = {};
+var SCENES = [
+  { name: 'meadow', sky: ['#8FD3FF', '#EAF8FF'], ground: '#7ED957', blade: '#A6EE7A', hillFar: '#B9EBA4', hillNear: '#8FDD6E', accent: '#FF5E7A', dirt: '#5A3D2B', dirt2: '#7A553D', dust: '#E8D9B8' },
+  { name: 'beach', sky: ['#7FD8FF', '#FFF4D6'], ground: '#FFE8B3', blade: '#FFF3CC', hillFar: '#8ADBF2', hillNear: '#FFD98A', accent: '#06D6A0', dirt: '#C49A5B', dirt2: '#D8B27A', dust: '#FFF0C8' },
+  { name: 'night', sky: ['#1B2A5A', '#3A4B8C'], ground: '#2F6B4F', blade: '#4D9A6F', hillFar: '#2F6B5A', hillNear: '#3C8A6E', accent: '#FFD166', dirt: '#2B1F33', dirt2: '#3F2E4A', dust: '#8FA3C8' },
+  { name: 'candy', sky: ['#FFC6E8', '#FFF0F8'], ground: '#FFB7D5', blade: '#FFD6E8', hillFar: '#F6C9FF', hillNear: '#E9A6FF', accent: '#4CC9F0', dirt: '#6B3E2E', dirt2: '#8B5240', dust: '#FFE0EE' }
+];
+function scene() { return SCENES[G.scene]; }
+
+// ---------- particles, texts, flowers ----------------------------------------
+var PARTS = [], MAXP = 300, TEXTS = [], FLOWERS = [];
+function spawnP(p) { if (PARTS.length >= MAXP) PARTS.shift(); p.t = 0; PARTS.push(p); }
+function sparkleRing(x, y) {
+  for (var i = 0; i < 8; i++) spawnP({ k: 'spark', x: x, y: y, a: i * TAU / 8, R: 0.08 * L.U, s: 7 * L.S, life: 0.25, col: '#FFFFFF' });
+}
+function goldSparks(x, y, n, R) {
+  for (var i = 0; i < n; i++) spawnP({ k: 'spark', x: x, y: y, a: rnd(0, TAU), R: R || 0.12 * L.U, s: 6 * L.S, life: rnd(0.4, 0.7), col: pick(['#FFD166', '#FFF3C4', '#FFFFFF']) });
+}
+function dust(x, y) {
+  for (var i = 0; i < 5; i++) spawnP({ k: 'dust', x: x + rnd(-0.03, 0.03) * L.U, y: y - 2, vx: rnd(-1, 1) * 0.25 * L.U, vy: rnd(-0.15, -0.02) * L.U, r: rnd(5, 9) * L.S, life: 0.25 });
+}
+function confetti(x, y, n, up) {
+  var night = G.scene === 2;
+  for (var i = 0; i < n; i++) {
+    var a = -Math.PI / 2 + rnd(-0.9, 0.9), sp = rnd(0.5, 1.3) * L.U;
+    spawnP({ k: night ? 'fw' : 'conf', x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp * (up || 1), w: rnd(6, 10) * L.S, h: rnd(4, 7) * L.S,
+      rot: rnd(0, TAU), vr: rnd(-8, 8), col: pick(CONFETTI), life: 1.2 });
+  }
+}
+function rainbowBurst(x, y) {
+  for (var i = 0; i < 40; i++) {
+    var a = rnd(0, TAU), sp = rnd(0.4, 1.1) * L.U;
+    spawnP({ k: 'conf', x: x, y: y, vx: Math.cos(a) * sp, vy: Math.sin(a) * sp, w: 8 * L.S, h: 8 * L.S, rot: a, vr: rnd(-6, 6), col: CONFETTI[i % 6], life: 1.2 });
+  }
+}
+function impactStar(x, y) { spawnP({ k: 'star8', x: x, y: y, R: 0.07 * L.U * L.K, life: 0.21, rot: rnd(0, 0.5) }); }
+function ring(x, y, R, life, lw) { spawnP({ k: 'ring', x: x, y: y, R: R || 0.25 * L.U * L.K, life: life || 0.2, lw: (lw || 6) * L.S }); }
+function popText(s, x, y, size, color, delay, tag) {
+  var tilt = rnd(-15, 15) * DEG;
+  if (TEXTS.length >= 12) TEXTS.shift();
+  TEXTS.push({ s: s, x: x, y: y, size: size, col: color, t: 0, delay: delay || 0, tilt: tilt, tag: tag || '', pulse: 0 });
+}
+var TXTW = {}; // measured glyph widths per string + size (measureText is not free on a phone)
+function textW(s, size) { var key = s + '|' + Math.round(size); if (TXTW[key] == null) { ctx.font = font(size); TXTW[key] = ctx.measureText(s).width; } return TXTW[key]; }
+// «ПА!» / «ПА-ПА!» / «ПА-ПА-ПА!»: centred a hero-height above her pogo apex (never on her head), fits the screen at its
+// 1.3 overshoot and stays under the star row: when the sky is too short it slides sideways off her column instead of
+// down onto her face. Only one combo string is alive at a time: older «ПА» texts (and a live «УРА!») die over 120 ms, or
+// vanish at once when `instant` (the big-boom / combo-8 cascade, 60 ms apart) so no pile of ghost strings builds up.
+function bonkText(combo, x, y, instant, belowY) {
+  var n = Math.min(combo, 3), sizes = [0.09, 0.11, 0.13, 0.11, 0.09, 0.075], si = n - 1, size, ws, total, i;
+  var syl = n === 1 ? ['ПА!'] : n === 2 ? ['ПА-', 'ПА!'] : ['ПА-', 'ПА-', 'ПА!'];
+  var cols = ['#FF5E7A', '#FFD166', '#4CC9F0'];
+  for (var tries = 0; tries < 4; tries++) {
+    size = sizes[si] * L.U * L.K; ws = []; total = 0;
+    for (i = 0; i < syl.length; i++) { var w = textW(syl[i], size); ws.push(w); total += w; }
+    if (total * 1.3 <= 0.9 * L.W || si >= 5) break;
+    si = si < 3 ? 3 : si + 1; // drop a size step until the whole string fits
+  }
+  var half = total * 1.3 / 2 + 0.03 * L.W, minY = L.starY + L.starSize * 2 + size * 0.7;
+  y -= 0.5 * size;
+  // a cloud rider: up there the star row (or, in portrait, the sun) is where the string would go, so its ПА goes just
+  // under the cloud, beside her pogo column
+  if (belowY != null && (y < minY || L.H > L.W)) { y = belowY + 0.5 * size; x += (x < L.W / 2 ? 1 : -1) * (half + L.heroH * 0.5); }
+  else if (y < minY) {
+    var sx = x + (x < L.W / 2 ? 1 : -1) * (half + L.heroH * 0.6);
+    var rowHalf = L.starSize * 1.4 * 5 + L.starSize; // pushed up under the star row: also slide off the counter column
+    if (Math.abs(sx - L.W / 2) < half + rowHalf) sx = sx < L.W / 2 ? L.W / 2 - half - rowHalf : L.W / 2 + half + rowHalf;
+    y = minY; x = sx;
+  }
+  // «УРА!» stays on screen for its whole life: a ПА string that would overlap it (in both axes) slides off to its
+  // side; when there is no room beside it, it goes above it
+  var ura = null; for (var q = 0; q < TEXTS.length; q++) if (TEXTS[q].tag === 'ura' && TEXTS[q].die == null) ura = TEXTS[q];
+  if (ura) {
+    var uraHalf = textW(ura.s, ura.size) * 0.65 + 0.02 * L.U;
+    if (Math.abs(y - ura.y) < 0.5 * (size + ura.size) + 0.02 * L.U && Math.abs(x - ura.x) < half + uraHalf) {
+      var side = x < ura.x ? -1 : 1, ax = ura.x + side * (uraHalf + half);
+      // no room beside it: above it (below it is exactly where her head is at the pogo apex)
+      if (ax >= half && ax <= L.W - half) x = ax; else y = Math.max(minY, ura.y - 0.5 * (size + ura.size) - 0.02 * L.U);
+    }
+  }
+  var ncx = clamp(x, half, L.W - half), cx = ncx - total / 2;
+  // the previous ПА string fades out, unless the new one lands on top of it: then it goes at once (no «ПА-ПА-ПА-ПА» frame)
+  for (var k = TEXTS.length - 1; k >= 0; k--) {
+    var tx = TEXTS[k]; if (tx.tag !== 'pa') continue;
+    if (instant || (Math.abs(tx.y - y) < 0.3 * L.U && Math.abs(tx.x - ncx) < 0.5 * L.U)) TEXTS.splice(k, 1); else if (tx.die == null) tx.die = 0;
+  }
+  for (var j = 0; j < syl.length; j++) { popText(syl[j], cx + ws[j] / 2, y, size, cols[j], j * 0.06, 'pa'); cx += ws[j]; }
+}
+function sproutFlowers(x) {
+  var n = 2 + (Math.random() < 0.5 ? 1 : 0);
+  for (var i = 0; i < n; i++) {
+    var f = { xf: clamp(x + rnd(-0.1, 0.1) * L.U, 10, L.W - 10) / L.W, dy: rnd(0.01, 0.05), col: pick(CONFETTI), t: 0, ph: rnd(0, TAU), h: (7 + Math.floor(Math.random() * 6)) * 0.005 * L.U };
+    if (FLOWERS.length >= 40) FLOWERS.shift();
+    FLOWERS.push(f);
+  }
+}
+function updateParticles(dt) {
+  var g = 1800 * L.S;
+  for (var i = PARTS.length - 1; i >= 0; i--) {
+    var p = PARTS[i]; p.t += dt;
+    if (p.t >= p.life) { PARTS.splice(i, 1); continue; }
+    if (p.k === 'conf') { p.vy += g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt; }
+    else if (p.k === 'fw') { p.vx *= (1 - 2 * dt); p.vy *= (1 - 2 * dt); p.vy += g * 0.15 * dt; p.x += p.vx * dt; p.y += p.vy * dt; }
+    else if (p.k === 'dust') { p.x += p.vx * dt; p.y += p.vy * dt; }
+    else if (p.k === 'hat') { p.vy += g * dt; p.x += p.vx * dt; p.y += p.vy * dt; p.rot += p.vr * dt; }
+  }
+  for (var j = TEXTS.length - 1; j >= 0; j--) {
+    var tx = TEXTS[j]; tx.t += dt;
+    if (tx.die != null) tx.die += dt;
+    if (tx.pulse > 0) tx.pulse -= dt;
+    if (tx.t - tx.delay > 1.0 || tx.die > 0.12) TEXTS.splice(j, 1);
+  }
+  for (var k = 0; k < FLOWERS.length; k++) FLOWERS[k].t += dt;
+}
+function drawParticles(front) {
+  for (var i = 0; i < PARTS.length; i++) {
+    var p = PARTS[i], u = p.t / p.life;
+    if ((p.k === 'hat') === !!front) continue; // the spun-off hat tumbles behind her, never across her face
+    ctx.save();
+    if (p.k === 'spark') {
+      var r = p.R * easeOut(u), x = p.x + Math.cos(p.a) * r, y = p.y + Math.sin(p.a) * r;
+      ctx.globalAlpha = 1 - u * u; ctx.fillStyle = p.col; star(x, y, p.s * (1.2 - u * 0.7), 4, 0.4, p.t * 4); ctx.fill();
+    } else if (p.k === 'dust') {
+      ctx.globalAlpha = (1 - u) * 0.85; ctx.fillStyle = scene().dust; circle(p.x, p.y, p.r * (0.6 + u)); ctx.fill();
+    } else if (p.k === 'conf') {
+      ctx.globalAlpha = 1 - u * u * u; ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.fillStyle = p.col; ctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+    } else if (p.k === 'fw') {
+      ctx.globalAlpha = 1 - u; ctx.fillStyle = p.col; circle(p.x, p.y, p.w * 0.4 * (1 - u * 0.5)); ctx.fill();
+    } else if (p.k === 'ring') {
+      ctx.globalAlpha = 1 - u; ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = Math.max(0.5, p.lw * (1 - u)); circle(p.x, p.y, p.R * easeOut(u)); ctx.stroke();
+    } else if (p.k === 'star8') {
+      var sc = Math.min(1, p.t / 0.06); ctx.globalAlpha = u < 0.3 ? 1 : 1 - (u - 0.3) / 0.7;
+      ctx.translate(p.x, p.y); ctx.rotate(p.rot); ctx.scale(sc, sc);
+      star(0, 0, p.R, 8, 0.5, 0); fillStroke('#FFD93D', '#FF9F1C', 3 * L.S);
+    } else if (p.k === 'hat') {
+      ctx.globalAlpha = 1 - u * u; ctx.translate(p.x, p.y); ctx.rotate(p.rot); drawTallHat(p.w, p.col);
+    }
+    ctx.restore();
+  }
+}
+function drawTexts() {
+  for (var i = 0; i < TEXTS.length; i++) {
+    var tx = TEXTS[i], u = tx.t - tx.delay; if (u < 0) continue;
+    var sc = u < 0.09 ? 1.3 * smooth(u / 0.09) : u < 0.18 ? 1.3 - 0.3 * smooth((u - 0.09) / 0.09) : 1;
+    var alpha = u < 0.3 ? 1 : 1 - (u - 0.3) / 0.7, die = tx.die != null ? Math.min(1, tx.die / 0.12) : 0;
+    if (tx.pulse > 0) sc *= 1 + 0.25 * Math.sin(tx.pulse / 0.12 * Math.PI); // one string pulses per queued bonk of a cascade
+    ctx.save(); ctx.globalAlpha = Math.max(0, alpha) * (1 - die);
+    ctx.translate(tx.x, tx.y - 0.1 * L.U * Math.min(1, u) - 0.05 * L.U * die); ctx.rotate(tx.tilt); ctx.scale(sc, sc);
+    ctx.font = font(tx.size); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    strokeFillText(tx.s, 0, 0, tx.col, 6 * L.S * (tx.size / (0.09 * L.U)));
+    ctx.restore();
+  }
+}
+// a flower is stamped from a small cached sprite (6 heights x 6 colours); origin = stem base
+var FLSPR = {};
+function flowerSprite(col, h) {
+  var key = col + ':' + Math.round(h); if (FLSPR[key]) return FLSPR[key];
+  var dpr = L.dpr, pad = 4 * L.S, w = h * 0.9 + 2 * pad, hh = h * 1.45 + 2 * pad;
+  var cv = document.createElement('canvas'); cv.width = Math.ceil(w * dpr); cv.height = Math.ceil(hh * dpr);
+  var save = ctx; ctx = cv.getContext('2d'); ctx.scale(dpr, dpr); ctx.translate(w / 2, hh - pad);
+  ctx.strokeStyle = '#3E8E41'; ctx.lineWidth = 3 * L.S; ctx.lineCap = 'round'; ctx.beginPath(); ctx.moveTo(0, 0); ctx.lineTo(0, -h); ctx.stroke();
+  ctx.fillStyle = col;
+  for (var k = 0; k < 5; k++) { var a = k * TAU / 5; circle(Math.cos(a) * h * 0.22, -h + Math.sin(a) * h * 0.22, h * 0.16); ctx.fill(); }
+  ctx.fillStyle = '#FFF3C4'; circle(0, -h, h * 0.13); ctx.fill();
+  ctx = save;
+  return FLSPR[key] = { cv: cv, w: w, h: hh, oy: hh - pad };
+}
+function drawFlowers() {
+  for (var i = 0; i < FLOWERS.length; i++) {
+    var f = FLOWERS[i], sc = Math.min(1, f.t / 0.3), sw = Math.sin(G.time * 2 + f.ph) * 0.12 + (G.ripple > 0 ? Math.sin(G.time * 30) * G.ripple * 0.4 : 0);
+    if (sc <= 0.01) continue;
+    var sp = flowerSprite(f.col, f.h);
+    ctx.save(); ctx.translate(f.xf * L.W, L.ground + f.dy * L.U); ctx.rotate(sw); ctx.scale(sc, sc);
+    ctx.drawImage(sp.cv, -sp.w / 2, -sp.oy, sp.w, sp.h);
+    ctx.restore();
+  }
+}
+
+// ---------- clouds ------------------------------------------------------------
+var CLOUDS = [];
+function initClouds() {
+  CLOUDS = [];
+  var layers = [0.3, 0.6, 1.0, 0.6, 1.0, 0.3];
+  for (var i = 0; i < 6; i++) CLOUDS.push({ xf: i / 6 + rnd(0, 0.1), yq: Math.random(), wf: rnd(0.14, 0.22), layer: layers[i], rider: null, ph: rnd(0, TAU) });
+}
+// cloud band 0.16h-0.46h in landscape, 0.25h-0.55h on a phone in portrait (just above her head, clear of the HUD)
+function cloudPos(cl) { cl.x = cl.xf * L.W; cl.w = cl.wf * L.U * L.K; cl.h = cl.w * 0.42; cl.y = L.H * lerp(lerp(0.16, 0.25, L.pk), lerp(0.46, 0.55, L.pk), cl.yq); cl.top = cl.y - cl.h * 0.3; }
+function updateClouds(dt) {
+  for (var i = 0; i < CLOUDS.length; i++) {
+    var cl = CLOUDS[i]; cl.xf += 0.015 * cl.layer * dt;
+    var r = cl.rider, held = r && isLive(r) && (r.claimed || (hero.jump && hero.jump.target === r));
+    if (held) { if (cl.xf > 0.95) cl.xf = 0.95; } // a claimed rider never sinks: the cloud waits ON SCREEN until she is done with it
+    else if (cl.xf > 1.18) { cl.xf = -0.18; if (r && r.state === 'idle') { r.state = 'sink'; r.t = 0; } }
+    cloudPos(cl);
+  }
+}
+function drawCloud(cl, ox) {
+  var x = cl.x + (ox || 0), y = cl.y, w = cl.w, h = cl.h, night = G.scene === 2;
+  ctx.save(); ctx.lineWidth = 6 * L.S; ctx.strokeStyle = night ? 'rgba(201,203,245,0.9)' : '#CFE6F5'; ctx.fillStyle = night ? '#8C8FD0' : '#FFFFFF';
+  var parts = [[0, 0, 0.5, 0.45], [-0.22, -0.05, 0.28, 0.5], [0.2, -0.15, 0.3, 0.6], [-0.02, -0.3, 0.26, 0.55]];
+  for (var pass = 0; pass < 2; pass++) for (var i = 0; i < 4; i++) {
+    var p = parts[i]; ellipse(x + p[0] * w, y + p[1] * h, p[2] * w, p[3] * h);
+    if (pass) ctx.fill(); else ctx.stroke();
+  }
+  ctx.restore();
+}
+
+// ---------- scenery: sky, hills, ground (cached per scene) --------------------
+var gradCache = {};
+// time-of-day sky: every phase is its OWN full-opacity gradient (an alpha tint of peach over blue cancels to grey).
+// day = the scene's colours; sunset / dusk / morning = [top, middle, horizon]; the night scene keeps its gradient in
+// every phase. Hills, grass and creatures sit on top and are never tinted.
+var PHASES = [null, ['#FF8C6B', '#FFB88C', '#FFE1B8'], ['#3A4B8C', '#8C7BC0', '#F2B8A0'], ['#9AD8F5', '#CCE5DC', '#FFF3C4']];
+function phaseGrad(sc, ph) {
+  var H = L.H, key = 'sky' + sc + ':' + ph + ':' + H + ':' + L.ground; if (gradCache[key]) return gradCache[key];
+  var S = SCENES[sc], P = sc === 2 ? null : PHASES[ph], g = ctx.createLinearGradient(0, 0, 0, H);
+  if (!P) { g.addColorStop(0, S.sky[0]); g.addColorStop(1, S.sky[1]); }
+  else { var gf = L.ground / H; g.addColorStop(0, P[0]); g.addColorStop(gf * 0.5, P[1]); g.addColorStop(gf * 0.85, P[2]); g.addColorStop(1, P[2]); }
+  return gradCache[key] = g;
+}
+function haloGrad(r) {
+  var key = 'halo' + Math.round(r); if (gradCache[key]) return gradCache[key];
+  var g = ctx.createRadialGradient(0, 0, r * 0.9, 0, 0, r * 1.9); g.addColorStop(0, 'rgba(255,243,176,0.45)'); g.addColorStop(1, 'rgba(255,243,176,0)');
+  return gradCache[key] = g;
+}
+function skyPhase() { var T = G.time, ph = Math.floor(T / 60) % 4, inP = T % 60; return { ph: ph, next: (ph + 1) % 4, mix: inP > 58 ? (inP - 58) / 2 : 0, inP: inP }; }
+var NIGHT_STARS = [], FIREFLIES = [];
+for (var si = 0; si < 40; si++) NIGHT_STARS.push({ x: Math.random(), y: Math.random() * 0.6, r: rnd(1, 2.5), ph: rnd(0, TAU) });
+for (var fi = 0; fi < 8; fi++) FIREFLIES.push({ x: rnd(0.05, 0.95), y: rnd(0.52, 0.78), ph: rnd(0, TAU), sp: rnd(0.2, 0.5) });
+function drawCrescent(mx, my, R, fill) {
+  var d = 0.6 * R, th = Math.atan(R / d), Rr = Math.sqrt(R * R + d * d);
+  ctx.beginPath(); ctx.arc(mx, my, R, -Math.PI / 2, Math.PI / 2, true); ctx.arc(mx + d, my, Rr, Math.PI - th, Math.PI + th, false); ctx.closePath();
+  fillStroke(fill, PLUM, 3 * L.S);
+}
+function buildBg(sc) {
+  var W = L.W, H = L.H, U = L.U, dpr = L.dpr, S = SCENES[sc];
+  var cv = document.createElement('canvas'); cv.width = Math.ceil(W * dpr); cv.height = Math.ceil(H * dpr);
+  var save = ctx; ctx = cv.getContext('2d'); ctx.scale(dpr, dpr);
+  // (the sky gradient is NOT baked in: it is painted live under the time-of-day tint and the sun, see drawSceneBg)
+  // far band
+  ctx.fillStyle = S.hillFar; ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S;
+  if (sc === 1) {
+    ctx.fillRect(0, L.ground - 0.2 * U, W, 0.2 * U + 10);
+    ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 3 * L.S;
+    for (var row = 0; row < 3; row++) { ctx.beginPath(); for (var x = -20; x <= W + 20; x += 6) { var yy = L.ground - 0.17 * U + row * 0.055 * U + Math.sin((x + row * 40) / (0.05 * U)) * 0.012 * U; if (x === -20) ctx.moveTo(x, yy); else ctx.lineTo(x, yy); } ctx.stroke(); }
+  } else {
+    // far hills; on a phone in portrait (L.pk -> 1) they grow and rise to about 0.57h so the sky is not an empty blue wall
+    var pk = L.pk;
+    for (var i = -1; i < 8; i++) { var hx = (i + 0.5) * W / 5 + ((i % 2) ? 0.1 : 0) * W, r = U * (0.26 + 0.08 * (((i + 3) * 7) % 3)) * (1 + 0.8 * pk); circle(hx, L.ground - 0.02 * U + r * (0.45 - 0.15 * pk), r); ctx.fill(); ctx.stroke(); }
+  }
+  // near band + decorations
+  ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S; ctx.lineJoin = 'round'; ctx.fillStyle = S.hillNear;
+  if (sc === 1) {
+    for (var d = -1; d < 6; d++) { circle((d + 0.5) * W / 4, L.ground + 0.1 * U, 0.2 * U); ctx.fill(); ctx.stroke(); }
+    for (var p = 0; p < 3; p++) drawPalm(p === 0 ? W * 0.12 : p === 1 ? W * 0.5 : W * 0.88, L.ground - 0.02 * U, U);
+  } else if (sc === 3) {
+    for (var d2 = -1; d2 < 6; d2++) { circle((d2 + 0.5) * W / 4, L.ground + 0.12 * U, 0.22 * U); ctx.fill(); ctx.stroke(); }
+    for (var q = 0; q < 4; q++) drawLollipop(W * (0.1 + 0.27 * q), L.ground - 0.01 * U, U, CONFETTI[q + 1]);
+  } else {
+    for (var d3 = -1; d3 < 6; d3++) { circle((d3 + 0.45) * W / 4, L.ground + 0.08 * U, 0.2 * U); ctx.fill(); ctx.stroke(); }
+    if (sc === 0) drawWindmill(W * 0.86, L.ground - 0.03 * U, U * L.K);
+  }
+  // ground with grass tufts
+  ctx.fillStyle = S.ground; ctx.strokeStyle = PLUM; ctx.lineWidth = 4 * L.S;
+  ctx.beginPath(); ctx.rect(-10, L.ground, W + 20, H - L.ground + 20); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(-10, L.ground); ctx.lineTo(W + 10, L.ground); ctx.stroke();
+  ctx.strokeStyle = S.blade; ctx.lineWidth = 3 * L.S; ctx.lineCap = 'round';
+  for (var b = 0; b < W / 22; b++) {
+    var bx = b * 22 + ((b * 7) % 9), by = L.ground + 0.03 * U + ((b * 5) % 4) * 0.012 * U, bh = 0.018 * U + ((b * 13) % 5) * 0.003 * U;
+    for (var k = -1; k <= 1; k++) { ctx.beginPath(); ctx.moveTo(bx, by); ctx.lineTo(bx + k * bh * 0.6, by - bh * (k ? 0.75 : 1)); ctx.stroke(); }
+  }
+  ctx = save;
+  BG[sc] = cv;
+}
+function drawPalm(x, y, U) {
+  ctx.strokeStyle = '#8B5A2B'; ctx.lineWidth = 0.025 * U; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x, y); ctx.quadraticCurveTo(x + 0.04 * U, y - 0.2 * U, x + 0.02 * U, y - 0.36 * U); ctx.stroke();
+  ctx.fillStyle = '#5BC46A'; ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S;
+  for (var i = 0; i < 5; i++) { var a = -Math.PI + i * Math.PI / 4; ellipse(x + 0.02 * U + Math.cos(a) * 0.08 * U, y - 0.36 * U + Math.sin(a) * 0.05 * U, 0.09 * U, 0.03 * U, a); ctx.fill(); ctx.stroke(); }
+}
+function drawLollipop(x, y, U, col) {
+  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 0.018 * U; ctx.beginPath(); ctx.moveTo(x, y); ctx.lineTo(x, y - 0.28 * U); ctx.stroke();
+  ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S; ctx.fillStyle = col; circle(x, y - 0.36 * U, 0.1 * U); ctx.fill(); ctx.stroke();
+  ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = 0.02 * U; ctx.beginPath();
+  for (var a = 0; a < 3 * TAU; a += 0.2) { var r = a / (3 * TAU) * 0.08 * U; ctx.lineTo(x + Math.cos(a) * r, y - 0.36 * U + Math.sin(a) * r); } ctx.stroke();
+}
+function drawWindmill(x, y, U) {
+  ctx.fillStyle = '#FFF0D6'; ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S;
+  ctx.beginPath(); ctx.moveTo(x - 0.05 * U, y); ctx.lineTo(x + 0.05 * U, y); ctx.lineTo(x + 0.03 * U, y - 0.22 * U); ctx.lineTo(x - 0.03 * U, y - 0.22 * U); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#FF9F1C'; ctx.beginPath(); ctx.moveTo(x - 0.045 * U, y - 0.21 * U); ctx.lineTo(x + 0.045 * U, y - 0.21 * U); ctx.lineTo(x, y - 0.29 * U); ctx.closePath(); ctx.fill(); ctx.stroke();
+  ctx.fillStyle = '#FFF0D6'; for (var k = 0; k < 4; k++) { var a = k * Math.PI / 2 + 0.4; ctx.save(); ctx.translate(x, y - 0.22 * U); ctx.rotate(a); rrect(-0.012 * U, -0.14 * U, 0.024 * U, 0.14 * U, 0.01 * U); ctx.fill(); ctx.stroke(); ctx.restore(); }
+  circle(x, y - 0.22 * U, 0.015 * U); fillStroke('#FF5E7A', PLUM, 3 * L.S);
+}
+function starAlpha(sc, ph) { return sc === 2 ? 1 : (ph.ph === 2 ? 1 - ph.mix : ph.next === 2 ? ph.mix : 0); }
+function sunAlpha(ph) { return lerp(ph.ph === 2 ? 0 : 1, ph.next === 2 ? 0 : 1, ph.mix); }
+// behind the hills: stars (night scene or dusk phase) and the crescent moon
+function drawSkyBack(sc, ox, ph) {
+  var W = L.W, H = L.H, starA = starAlpha(sc, ph);
+  if (starA > 0) {
+    ctx.fillStyle = '#FFF6C4';
+    for (var i = 0; i < NIGHT_STARS.length; i++) { var st = NIGHT_STARS[i]; ctx.globalAlpha = starA * (0.5 + 0.5 * Math.sin(G.time * 2 + st.ph)); circle(ox + st.x * W, st.y * H * 0.9, st.r * L.S * 1.5); ctx.fill(); }
+    ctx.globalAlpha = 1;
+  }
+}
+function moonAlpha(sc, ph) { return sc === 2 ? 1 : 1 - sunAlpha(ph); }
+// crescent moon (a path, not a pasted disc): rises during dusk, fixed high in the night scene. Like the sun it never
+// fades and is drawn in front of the clouds while it is up; it sets behind the hills (under the cached land) as the
+// night ends
+function drawMoon(sc, ox, ph) {
+  var W = L.W, H = L.H, moonA = moonAlpha(sc, ph);
+  if (moonA <= 0) return;
+  var mr = 0.07 * L.U * (sc === 2 ? 1 : 0.85), mx = ox + W * 0.18;
+  var rise = sc === 2 ? 1 : (ph.ph === 2 ? Math.min(1, ph.inP / 20) : ph.next === 2 ? 0 : 1);
+  var my = lerp(L.ground + 0.12 * L.U, L.safe.t + H * (0.42 - 0.26 * smooth(rise)), smooth(moonA));
+  drawCrescent(mx, my, mr, '#FFF3B0');
+}
+// fireflies drift in the 0.5h-0.8h band, in front of the hills
+function drawFireflies(sc, ox, ph) {
+  var starA = starAlpha(sc, ph); if (starA <= 0) return;
+  for (var f = 0; f < FIREFLIES.length; f++) {
+    var ff = FIREFLIES[f], fx = ox + (ff.x + Math.sin(G.time * ff.sp + ff.ph) * 0.05) * L.W, fy = (ff.y + Math.sin(G.time * ff.sp * 1.7 + ff.ph) * 0.03) * L.H;
+    var tw = 0.4 + 0.6 * Math.abs(Math.sin(G.time * 3 + ff.ph * 2));
+    ctx.fillStyle = '#FFF176'; ctx.globalAlpha = starA * tw * 0.3; circle(fx, fy, 0.02 * L.U); ctx.fill();
+    ctx.globalAlpha = starA * tw; circle(fx, fy, 0.007 * L.U); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+// the sun travels along an arc across the day (morning: left & low -> day: high -> sunset: right & low), hidden at dusk;
+// in portrait the arc is narrower and the sun bigger; on the START screen it parks in a corner clear of the title and the
+// mute icon and glides onto its arc during the intro
+function sunPos(ph, ox) {
+  var W = L.W, H = L.H, pk = L.pk, r = 0.07 * L.U * L.K * (1 + 0.3 * pk);
+  // dusk: parked where it set; during the 2 s dusk->morning crossfade it already rises at the morning spot (no jump)
+  var pArc = ph.ph === 3 ? 0.05 + 0.25 * ph.inP / 60 : ph.ph === 0 ? 0.3 + 0.3 * ph.inP / 60 : ph.ph === 1 ? 0.6 + 0.4 * ph.inP / 60 : ph.mix > 0 ? 0.05 : 1;
+  // landscape: the arc sits a little higher so the sun stays clear of her apex and the ПА string on right-side bonks
+  var sx = W * (lerp(0.62, 0.5, pk) + lerp(0.33, 0.25, pk) * pArc), sy = H * (lerp(0.38, 0.44, pk) - lerp(0.19, 0.24, pk) * Math.sin(pArc * Math.PI));
+  var st = G.state === 'start' ? 1 : G.intro ? 1 - smooth(Math.min(1, G.intro.t)) : 0;
+  if (st > 0) { sx = lerp(sx, W * lerp(0.87, 0.3, pk), st); sy = lerp(sy, L.safe.t + lerp(0.12, 0.10, pk) * H + r * 0.5 * pk, st); }
+  return { x: ox + sx, y: sy, r: r };
+}
+// the halo gradient and the 10 rays come from one cached sprite per radius (rotated as a whole); the disc and face are live
+var SUNSPR = {};
+function sunSprite(r) {
+  var key = Math.round(r); if (SUNSPR[key]) return SUNSPR[key];
+  var dpr = L.dpr, R = r * 1.95, cv = document.createElement('canvas'); cv.width = cv.height = Math.ceil(R * 2 * dpr);
+  var save = ctx; ctx = cv.getContext('2d'); ctx.scale(dpr, dpr); ctx.translate(R, R);
+  ctx.fillStyle = haloGrad(r); circle(0, 0, r * 1.9); ctx.fill();
+  ctx.strokeStyle = '#FFD93D'; ctx.lineWidth = 4 * L.S; ctx.lineCap = 'round';
+  for (var k = 0; k < 10; k++) { var a = k * TAU / 10; ctx.beginPath(); ctx.moveTo(Math.cos(a) * r * 1.25, Math.sin(a) * r * 1.25); ctx.lineTo(Math.cos(a) * r * 1.55, Math.sin(a) * r * 1.55); ctx.stroke(); }
+  ctx = save;
+  return SUNSPR[key] = { cv: cv, R: R };
+}
+// Normally drawn AFTER the clouds so the one big friendly face in the sky never gets cut into bowls and doughnuts.
+// It never alpha-fades (a translucent orange disc over a purple dusk sky reads as a sick grey ghost): while setting or
+// rising (sunA < 1) it SINKS at full colour below the ground line and drawSceneBg paints it BEFORE the hills instead.
+function drawSun(sc, ox, ph) {
+  var sunA = sunAlpha(ph);
+  if (sc === 2 || sunA <= 0) return;
+  var sp = sunPos(ph, ox), sx = sp.x, r = sp.r, sy = sp.y + (1 - smooth(sunA)) * (L.ground - 0.1 * L.U + r - sp.y), spr = sunSprite(r); // just under the hill / sea line
+  ctx.save(); ctx.translate(sx, sy); ctx.rotate(G.time * 0.3); ctx.drawImage(spr.cv, -spr.R, -spr.R, spr.R * 2, spr.R * 2); ctx.restore();
+  circle(sx, sy, r); fillStroke(ph.ph === 1 ? '#FFB347' : '#FFE066', PLUM, 4 * L.S);
+  var blink = (G.time % 3.2) < 0.15 ? 0.1 : 1; ctx.fillStyle = PLUM;
+  ellipse(sx - r * 0.3, sy - r * 0.15, r * 0.09, r * 0.16 * blink); ctx.fill(); ellipse(sx + r * 0.3, sy - r * 0.15, r * 0.09, r * 0.16 * blink); ctx.fill();
+  ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S; ctx.lineCap = 'round'; ctx.beginPath(); ctx.arc(sx, sy + r * 0.1, r * 0.35, 0.2, Math.PI - 0.2); ctx.stroke();
+  ctx.fillStyle = 'rgba(255,120,120,0.4)'; circle(sx - r * 0.5, sy + r * 0.15, r * 0.14); ctx.fill(); circle(sx + r * 0.5, sy + r * 0.15, r * 0.14); ctx.fill();
+}
+// lite (both halves of the 0.8 s scene slide): no fireflies / rainbow, the frame already paints two full backgrounds
+function drawSceneBg(sc, ox, lite) {
+  if (!BG[sc]) buildBg(sc);
+  var qi = BGQ.indexOf(sc); if (qi >= 0) BGQ.splice(qi, 1);
+  var W = L.W, H = L.H, ph = skyPhase(), sunFront = sunAlpha(ph) >= 1, moonFront = moonAlpha(sc, ph) >= 1;
+  ctx.fillStyle = phaseGrad(sc, ph.ph); ctx.fillRect(ox, 0, W, H);     // this phase's sky, full opacity
+  if (ph.mix > 0) { ctx.globalAlpha = ph.mix; ctx.fillStyle = phaseGrad(sc, ph.next); ctx.fillRect(ox, 0, W, H); ctx.globalAlpha = 1; } // 2 s crossfade
+  drawSkyBack(sc, ox, ph);                                   // stars
+  if (!moonFront) drawMoon(sc, ox, ph);                      // setting: behind the hills
+  if (!sunFront) drawSun(sc, ox, ph);                        // setting / rising: behind the hills
+  ctx.drawImage(BG[sc], ox, 0, W, H);                        // hills, landmarks, ground (never tinted)
+  if (G.rainbow && ox === 0 && !lite) drawRainbow();
+  for (var i = 0; i < CLOUDS.length; i++) drawCloud(CLOUDS[i], ox);
+  if (moonFront) drawMoon(sc, ox, ph);                       // night / dusk: in front of the clouds
+  if (sunFront) drawSun(sc, ox, ph);                         // daytime: in front of the clouds
+  if (!lite) drawFireflies(sc, ox, ph);
+}
+function drawRainbow() {
+  var r = G.rainbow, p = Math.min(1, r.t / 0.5), a = r.t > 2 ? Math.max(0, 1 - (r.t - 2) / 0.5) : 1;
+  var cols = ['#FF5E7A', '#FF9F1C', '#FFD166', '#06D6A0', '#4CC9F0', '#B388FF', '#FFA6C9'];
+  ctx.save(); ctx.globalAlpha = 0.7 * a; ctx.lineWidth = 0.02 * L.U; ctx.lineCap = 'round';
+  var cx = L.W / 2, cy = L.ground + 0.1 * L.H, R = Math.max(L.W * 0.55, L.H * 0.7);
+  for (var i = 0; i < 7; i++) { ctx.strokeStyle = cols[i]; ctx.beginPath(); ctx.arc(cx, cy, R - i * 0.02 * L.U, Math.PI, Math.PI + Math.PI * p); ctx.stroke(); }
+  ctx.restore();
+}
+
+// ---------- creatures (Бубуки) -------------------------------------------------
+var CRE = [], SPAWNQ = [];
+function nextColor() { return CRE_COLORS[(G.colorIdx++) % CRE_COLORS.length]; }
+function creH(c) { return L.creW * c.size * 0.92; }
+function layerH(c) { return creH(c) * 0.8; }
+function headY(c) {
+  if (c.type === 'stack') return c.y - (c.layers - 1) * layerH(c) - creH(c) * 0.6;
+  return c.y - creH(c) * 0.6 * c.up;
+}
+function topY(c) {
+  if (c.type === 'stack') return c.y - (c.layers - 1) * layerH(c) - creH(c) * 0.95;
+  return c.y - creH(c) * c.up * 0.95;
+}
+function isLive(c) { return c.state === 'idle' || c.state === 'pop' || c.state === 'peek'; }
+function bossFace(c) { return c.hits === 0 ? 'smug' : c.hits === 1 ? 'surprised' : 'dizzy'; } // smug -> surprised -> dizzy
+function bonkable(c) { return (c.state === 'idle' || c.state === 'pop' || c.state === 'peek') && c.up >= 0.3 && !(c.inv > 0); }
+// a hole is free when nothing lives in it, the hero is not standing on it, and no boss sits next to it
+// her hole = where she stands, or where the current jump / pogo lands (so nothing pops up through her on landing);
+// the zone is half a creature + half of her (0.12U·K), so a creature never pops up touching her dress
+function heroOnHole(i) {
+  if (hero.stack || G.state !== 'play') return false;
+  var hx = hero.jump ? hero.jump.tx : hero.x, h = L.holes[i];
+  return !!h && Math.abs(h.x - hx) < 0.12 * L.U * L.K;
+}
+function holeFree(i) {
+  if (i == null || i < 0 || i >= L.holes.length || heroOnHole(i)) return false; // a stale index is never "free"
+  for (var k = 0; k < CRE.length; k++) {
+    var c = CRE[k]; if (c.cloud || c.state === 'fly' || c.state === 'gone') continue;
+    if (c.hole === i) return false;
+    if (c.type === 'boss' && Math.abs(c.hole - i) === 1) return false;
+  }
+  return true;
+}
+function creatureAtHole(i) { for (var k = 0; k < CRE.length; k++) { var c = CRE[k]; if (c.hole === i && !c.cloud && isLive(c)) return c; } return null; }
+function freeHoles() { var r = []; for (var i = 0; i < L.holes.length; i++) if (holeFree(i)) r.push(i); return r; }
+function lifeFor() { return G.bonks < 25 ? rnd(8, 10) : rnd(6, 7); }
+function placeCreature(c) {
+  if (c.cloud) { c.x = c.cloud.x; c.y = c.cloud.top; }
+  else if (c.hop) { var h = c.hop, u = Math.min(1, h.t / h.dur); c.x = lerp(h.fx, h.tx, u); c.y = L.ground - Math.sin(u * Math.PI) * 0.1 * L.U; }
+  else { c.x = L.holes[c.hole].x; c.y = L.ground; }
+}
+function makeCreature(o) {
+  var hole = o.hole == null ? null : o.hole;
+  if (!o.cloud && (hole == null || hole < 0 || hole >= L.holes.length)) { hole = nearestFreeHole(hole == null ? L.holes.length / 2 : hole); if (hole == null) return null; }
+  var c = { type: o.type || 'ground', hole: hole, cloud: o.cloud || null, x: 0, y: 0, fx: 0, fy: 0,
+    color: o.color || nextColor(), size: o.size || 1, state: o.peek ? 'peek' : 'pop', t: 0, up: o.peek ? 0.35 : 0, sx: 1, sy: 1,
+    life: lifeFor(), claimed: false, face: o.face || 'smile', faceT: 0, px: 0, py: 0, ph: rnd(0, TAU), hits: 0, inv: 0, nuzzle: false,
+    layers: o.layers || 0, colors: null, hop: null, rot: 0, vx: 0, vy: 0, wink: o.wink || 0, teaseT: rnd(2, 5), come: !!o.come, dance: 0, stay: false, hopT: 0 };
+  if (c.type === 'stack') { c.layers = 2 + (Math.random() < 0.4 ? 1 : 0); c.colors = [c.color, nextColor(), nextColor()]; }
+  if (c.type === 'boss') { c.size = 2.17; c.color = '#9B6BFF'; c.face = 'smug'; }
+  if (c.cloud) c.cloud.rider = c;
+  placeCreature(c); CRE.push(c);
+  if (c.state === 'pop') SFX.bu(o.buMult || (c.cloud ? 1.25 : c.type === 'boss' ? 0.6 : 1));
+  return c;
+}
+function spawnInterval() { return G.bonks < 10 ? 1.4 : G.bonks < 100 ? 1.1 : 0.8; }
+function pickType() {
+  var b = G.bonks, r = Math.random();
+  if (b >= 20 && r < 0.18) return 'hat';
+  if (b >= 15 && r < 0.33) return 'stack';
+  return 'ground';
+}
+function nearestFreeHole(idx) { var f = freeHoles(), best = null, bd = 1e9; for (var i = 0; i < f.length; i++) { var d = Math.abs(f[i] - idx); if (d < bd) { bd = d; best = f[i]; } } return best; }
+function nearestHoleIdx(x) { var best = 0, bd = 1e9; for (var i = 0; i < L.holes.length; i++) { var d = Math.abs(L.holes[i].x - x); if (d < bd) { bd = d; best = i; } } return best; }
+function spawnOne(o) {
+  o = o || {};
+  var hole = o.hole;
+  if (hole == null || !holeFree(hole)) { hole = nearestFreeHole(hole == null ? rnd(0, L.holes.length) : hole); if (hole == null) return null; }
+  return makeCreature({ type: o.type || pickType(), hole: hole, come: o.come, color: o.color, wink: o.wink, peek: o.peek });
+}
+function spawnCloud() {
+  // only clouds whose rider (feet on cl.top, 0.11U tall + antenna) stays clear of the star row / counter
+  var minTop = L.starY + L.starSize * 2.6 + creH({ size: 1 }) * 1.3;
+  var cands = CLOUDS.filter(function (cl) { return !cl.rider && cl.x > 0.12 * L.W && cl.x < 0.75 * L.W && cl.top > minTop; });
+  if (!cands.length) return null;
+  return makeCreature({ type: 'cloud', cloud: pick(cands) });
+}
+function spawnTriplet(centerIdx, n) {
+  var f = freeHoles(); if (f.length < 2) return false;
+  // find contiguous run of n free holes closest to centerIdx
+  var best = null, bd = 1e9;
+  for (var i = 0; i + n - 1 < f.length; i++) {
+    if (f[i + n - 1] - f[i] === n - 1) { var mid = f[i] + (n - 1) / 2, d = Math.abs(mid - centerIdx); if (d < bd) { bd = d; best = f.slice(i, i + n); } }
+  }
+  if (!best) { f.sort(function (a, b) { return Math.abs(a - centerIdx) - Math.abs(b - centerIdx); }); best = f.slice(0, n); }
+  var ratios = [1.0, 1.12, 1.26, 1.4, 1.58];
+  for (var k = 0; k < best.length; k++) SPAWNQ.push({ t: k * 0.15, hole: best[k], type: 'ground', buMult: ratios[k % 5] });
+  G.lastTripletCycle = G.cycle; G.hadTriplet = true;
+  return true;
+}
+function hopToward(c, targetX) {
+  if (c.hop || c.cloud || !isLive(c) || c.type === 'boss') return;
+  var dir = targetX > c.x ? 1 : -1, to = c.hole + dir;
+  if (to < 0 || to >= L.holes.length || !holeFree(to)) return;
+  if (Math.abs(L.holes[to].x - targetX) > Math.abs(c.x - targetX)) return;
+  c.hop = { fx: c.x, tx: L.holes[to].x, t: 0, dur: 0.3 }; c.hole = to; c.up = 1; c.state = 'idle';
+  SFX.hop();
+}
+function updateSpawner(dt) {
+  if (G.state !== 'play' || G.trans) return;
+  for (var i = SPAWNQ.length - 1; i >= 0; i--) {
+    var q = SPAWNQ[i]; q.t -= dt;
+    if (q.t <= 0) { SPAWNQ.splice(i, 1); if (holeFree(q.hole)) makeCreature(q); else spawnOne({ hole: q.hole, type: q.type, wink: q.wink, color: q.color }); }
+  }
+  if (G.intro && G.intro.t < 1.0) return;
+  var live = 0; for (var k = 0; k < CRE.length; k++) if (isLive(CRE[k])) live++;
+  if (live < 2 && SPAWNQ.length === 0) { spawnOne({ hole: Math.floor(rnd(0, L.holes.length)) }); if (live < 1) spawnOne({ hole: Math.floor(rnd(0, L.holes.length)) }); }
+  var maxLive = clamp(L.holes.length - 2, 3, 6);
+  G.spawnT -= dt;
+  if (G.spawnT <= 0) {
+    G.spawnT = spawnInterval(); G.cycle++;
+    if (live < maxLive) {
+      var triplet = false, nearHero = false;
+      if (G.cycle === 2 && !G.hadTriplet) triplet = true;
+      else if (G.cycle - G.lastTripletCycle >= 3) triplet = true;
+      else if (G.bonks >= 20 && Math.random() < 0.5) triplet = true;
+      if (G.pt - G.last3T > 15 && G.pt > 15 && G.bonks > 3) { triplet = true; nearHero = true; }
+      var n = (G.bonks >= 100 && Math.random() < 0.2) ? 5 : 3;
+      var center = nearHero ? nearestHoleIdx(hero.x) : Math.floor(rnd(1, L.holes.length - 1));
+      if (triplet && spawnTriplet(center, n)) { if (nearHero) G.last3T = G.pt; }
+      else if ((G.bonks >= 15 || G.pt > 60) && Math.random() < 0.3 && spawnCloud()) { /* cloud creature */ }
+      else spawnOne({ peek: Math.random() < 0.25 });
+    }
+  }
+  // come-to-her: 6 s without a bonk
+  if (G.pt - G.lastBonkT > 6 && G.pt - G.comeT > 6 && !hero.air) {
+    G.comeT = G.pt;
+    // never pop up under her: use a neighbour hole; if a creature already sits there, it is the one that comes
+    var hi = nearestHoleIdx(hero.x), c = creatureAtHole(hi), s1 = Math.random() < 0.5 ? 1 : -1;
+    if (!c) { var sides = [hi + s1, hi - s1].filter(function (i) { return i >= 0 && i < L.holes.length; });
+      for (var si2 = 0; si2 < sides.length && !c; si2++) c = creatureAtHole(sides[si2]);
+      if (!c && sides.length) c = spawnOne({ hole: sides[0], type: 'ground' }); }
+    if (c) { for (var cc = 0; cc < CRE.length; cc++) if (CRE[cc].come && !CRE[cc].nuzzle) CRE[cc].come = false; c.come = true; } // one follower at a time
+  }
+  // boss
+  if (G.bossPending) {
+    var hasBoss = CRE.some(function (c) { return c.type === 'boss' && c.state !== 'gone'; });
+    if (!hasBoss) {
+      var mid = Math.floor(L.holes.length / 2), occ = creatureAtHole(mid);
+      for (var bi = mid - 1; bi <= mid + 1; bi++) { var oc = bi === mid ? occ : creatureAtHole(bi); if (oc && !oc.claimed && oc.state === 'idle' && hero.stack !== oc) { oc.state = 'sink'; oc.t = 0; } }
+      if (holeFree(mid) && !creatureAtHole(mid - 1) && !creatureAtHole(mid + 1)) { makeCreature({ type: 'boss', hole: mid }); G.bossPending = false; }
+    } else G.bossPending = false;
+  }
+}
+function updateCreatures(dt) {
+  for (var i = CRE.length - 1; i >= 0; i--) {
+    var c = CRE[i]; c.t += dt;
+    if (c.dance > 0) c.dance -= dt;
+    if (c.wink > 0) c.wink -= dt;
+    if (c.inv > 0) c.inv -= dt;
+    switch (c.state) {
+      // leaving peek, the pop continues from up = 0.35 instead of dipping back into the hole
+      case 'peek': c.up = 0.35; if (c.t > 1) { c.state = 'pop'; c.t = 0.35 * 0.18; SFX.bu(c.cloud ? 1.25 : 1); } break;
+      case 'pop': {
+        var u = Math.min(1, c.t / 0.18); c.up = u;
+        c.sy = u < 0.6 ? lerp(0.2, 1.25, u / 0.6) : lerp(1.25, 1, (u - 0.6) / 0.4); c.sx = 1.6 - c.sy * 0.6;
+        if (c.t >= 0.18) { c.state = 'idle'; c.t = 0; c.sx = c.sy = 1; c.up = 1; }
+        break;
+      }
+      case 'idle': {
+        c.up = 1; c.sx += (1 - c.sx) * 0.2; c.sy += (1 - c.sy) * 0.2;
+        if (c.type !== 'boss' && !c.come && hero.stack !== c) c.life -= dt;
+        c.teaseT -= dt;
+        if (c.teaseT <= 0) { c.teaseT = rnd(3, 7); if (c.type !== 'boss') { c.face = 'tease'; c.faceT = 0.7; } }
+        if (c.faceT > 0) { c.faceT -= dt; if (c.faceT <= 0) c.face = c.type === 'boss' ? bossFace(c) : 'smile'; }
+        // anticipation: pupils dilate and the mouth goes «o» while she is flying at this very creature
+        var flyingAtMe = hero.air && hero.jump && hero.jump.target === c;
+        if (flyingAtMe) { if (c.face === 'smile') c.face = 'antic'; } else if (c.face === 'antic') c.face = 'smile';
+        if (c.come && !c.hop && !hero.air) {
+          c.hopT += dt;
+          if (c.hopT > 0.7) { c.hopT = 0; var myI = nearestHoleIdx(c.x), heroI = nearestHoleIdx(hero.x); if (Math.abs(myI - heroI) > 1) hopToward(c, hero.x); }
+        }
+        if (c.life <= 0) {
+          var targeted = hero.jump && hero.jump.target === c;
+          if (c.claimed || targeted || hero.stack === c || G.boom || G.celeb) c.life = 1;
+          else { c.state = 'sink'; c.t = 0; SFX.nya(); }
+        }
+        break;
+      }
+      case 'sink': c.up = 1 - Math.min(1, c.t / 0.3); if (c.t >= 0.3) c.state = 'gone'; break;
+      case 'pancake': if (c.t >= (c.stay ? 0.1 : 0.2)) { c.state = 'spring'; c.t = 0; SFX.giggle(); } break;
+      case 'spring': {
+        var v = Math.min(1, c.t / (c.stay ? 0.1 : 0.12)); c.sx = lerp(1.6, 0.85, v); c.sy = lerp(0.3, 1.3, v);
+        if (v >= 1) {
+          if (c.stay) { c.state = 'idle'; c.t = 0; c.stay = false; c.face = c.type === 'boss' ? bossFace(c) : 'smile'; }
+          else { c.state = 'fly'; c.t = 0; c.fx = c.x; c.fy = c.y; c.vx = (c.x < hero.x - 1 ? -1 : c.x > hero.x + 1 ? 1 : (Math.random() < 0.5 ? -1 : 1)) * rnd(0.3, 0.45) * L.U; c.vy = -(c.y + 0.35 * L.U) / 0.45; c.rot = 0; c.sx = c.sy = 1; SFX.fly(); if (c.cloud) c.cloud.rider = null; }
+        }
+        break;
+      }
+      case 'fly': c.fx += c.vx * dt; c.fy += c.vy * dt; c.rot += (3 * Math.PI / 0.45) * dt; if (c.fy < -0.4 * L.U) c.state = 'gone'; break;
+    }
+    if (c.hop) { c.hop.t += dt; if (c.hop.t >= c.hop.dur) { c.hop = null; } }
+    if (c.state === 'gone') { if (c.cloud && c.cloud.rider === c) c.cloud.rider = null; CRE.splice(i, 1); continue; }
+    if (c.state !== 'fly') placeCreature(c);
+    // pupils track the hero
+    var hx = hero.x, hy = hero.y - L.heroH * 0.7, ex = c.x, ey = headY(c), d = dist(ex, ey, hx, hy) || 1;
+    var mx = (hx - ex) / d, my = (hy - ey) / d, mo = L.creW * c.size * 0.06;
+    c.px += (mx * mo - c.px) * 0.15; c.py += (my * mo - c.py) * 0.15;
+  }
+}
+function drawTallHat(w, col) {
+  var hh = w * 1.1;
+  ctx.lineWidth = 4 * L.S; ctx.strokeStyle = PLUM; ctx.fillStyle = col;
+  rrect(-w * 0.32, -hh, w * 0.64, hh, w * 0.08); ctx.fill();
+  ctx.save(); ctx.clip();
+  ctx.fillStyle = '#FFFFFF'; for (var i = 0; i < 4; i++) ctx.fillRect(-w * 0.4, -hh + hh * (0.15 + i * 0.25), w * 0.8, hh * 0.1);
+  ctx.restore(); ctx.stroke();
+  rrect(-w * 0.45, -w * 0.08, w * 0.9, w * 0.14, w * 0.07); fillStroke(col, PLUM, 4 * L.S);
+}
+function drawCrown(w, y) {
+  ctx.lineWidth = 3 * L.S; ctx.beginPath();
+  ctx.moveTo(-w * 0.3, y); ctx.lineTo(-w * 0.3, y - w * 0.28); ctx.lineTo(-w * 0.15, y - w * 0.14); ctx.lineTo(0, y - w * 0.34);
+  ctx.lineTo(w * 0.15, y - w * 0.14); ctx.lineTo(w * 0.3, y - w * 0.28); ctx.lineTo(w * 0.3, y); ctx.closePath();
+  fillStroke('#FFD166', PLUM, 3 * L.S);
+  ctx.fillStyle = '#FF5E7A'; circle(0, y - w * 0.08, w * 0.05); ctx.fill();
+}
+// one blob body with face; local origin = feet center; w,h = size
+function drawBlob(c, w, h, col, fly, faceOverride) {
+  var lw = 4 * L.S, face = faceOverride || c.face;
+  ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.strokeStyle = PLUM;
+  if (G.scene === 2) { ctx.fillStyle = col; ctx.globalAlpha = 0.25; circle(0, -h * 0.5, w * 0.75); ctx.fill(); ctx.globalAlpha = 1; }
+  // feet
+  rrect(-w * 0.32, -h * 0.06, w * 0.24, h * 0.12, w * 0.06); fillStroke(col, PLUM, lw);
+  rrect(w * 0.08, -h * 0.06, w * 0.24, h * 0.12, w * 0.06); fillStroke(col, PLUM, lw);
+  // antenna
+  ctx.beginPath(); ctx.moveTo(w * 0.05, -h * 0.93); ctx.quadraticCurveTo(w * 0.12, -h * 1.15, w * 0.22, -h * 1.2); ctx.stroke();
+  circle(w * 0.22, -h * 1.2, w * 0.07); fillStroke(scene().accent, PLUM, lw);
+  // body with 3-lobe wobble
+  ctx.beginPath();
+  for (var i = 0; i <= 28; i++) {
+    var a = i / 28 * TAU, r = 1 + 0.045 * Math.sin(3 * a + c.ph + G.time * 2.5);
+    var x = Math.cos(a) * w / 2 * r, y = -h / 2 + Math.sin(a) * h / 2 * r;
+    if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+  }
+  ctx.closePath(); fillStroke(col, PLUM, lw);
+  ctx.fillStyle = 'rgba(255,246,229,0.6)'; ellipse(-w * 0.22, -h * 0.8, w * 0.1, h * 0.055, -0.5); ctx.fill();
+  // arms when flying: wave + thumbs-up
+  if (fly) {
+    ctx.strokeStyle = PLUM; ctx.lineWidth = w * 0.09; ctx.beginPath();
+    ctx.moveTo(-w * 0.4, -h * 0.5); ctx.lineTo(-w * 0.62, -h * 0.85 + Math.sin(G.time * 25) * h * 0.1); ctx.stroke();
+    ctx.lineWidth = w * 0.05; ctx.strokeStyle = col; ctx.beginPath(); ctx.moveTo(-w * 0.4, -h * 0.5); ctx.lineTo(-w * 0.62, -h * 0.85 + Math.sin(G.time * 25) * h * 0.1); ctx.stroke();
+    circle(-w * 0.62, -h * 0.85 + Math.sin(G.time * 25) * h * 0.1, w * 0.09); fillStroke(col, PLUM, 3 * L.S);
+    ctx.lineWidth = w * 0.09; ctx.strokeStyle = PLUM; ctx.beginPath(); ctx.moveTo(w * 0.4, -h * 0.5); ctx.lineTo(w * 0.6, -h * 0.6); ctx.stroke();
+    rrect(w * 0.52, -h * 0.72, w * 0.16, w * 0.16, w * 0.04); fillStroke(col, PLUM, 3 * L.S);
+    rrect(w * 0.56, -h * 0.84, w * 0.07, w * 0.14, w * 0.03); fillStroke(col, PLUM, 3 * L.S);
+  }
+  // eyes
+  var surprised = face === 'surprised';
+  var er = w * (surprised ? 0.21 : 0.175), ery = surprised ? er : h * 0.2, ey = -h * 0.6, exo = w * 0.21;
+  var dil = face === 'antic' ? 1.4 : surprised ? 1.5 : 1, pr = w * 0.085 * dil;
+  for (var s = -1; s <= 1; s += 2) {
+    var ex = s * exo;
+    var closed = (face === 'tease' && s === 1) || (c.wink > 0 && s === -1);
+    if (surprised) { // huge round eyes with a star highlight: the "who, me?!" boss frame
+      circle(ex, ey, er); fillStroke('#FFFFFF', PLUM, lw);
+      ctx.fillStyle = PLUM; circle(ex + c.px * 0.5, ey + c.py * 0.5, pr); ctx.fill();
+      ctx.fillStyle = '#FFFFFF'; star(ex + c.px * 0.5 - pr * 0.3, ey + c.py * 0.5 - pr * 0.3, pr * 0.45, 4, 0.45, 0); ctx.fill();
+    } else if (face === 'dizzy') {
+      ellipse(ex, ey, er, ery); fillStroke('#FFFFFF', PLUM, lw);
+      ctx.strokeStyle = PLUM; ctx.lineWidth = 2.5 * L.S; ctx.beginPath();
+      for (var a2 = 0; a2 < 3 * TAU; a2 += 0.25) { var rr = a2 / (3 * TAU) * er * 0.7; ctx.lineTo(ex + Math.cos(a2 + G.time * 10) * rr, ey + Math.sin(a2 + G.time * 10) * rr); }
+      ctx.stroke();
+    } else if (closed) {
+      ctx.strokeStyle = PLUM; ctx.lineWidth = lw; ctx.beginPath(); ctx.arc(ex, ey + ery * 0.3, er * 0.7, Math.PI + 0.3, TAU - 0.3); ctx.stroke();
+    } else {
+      ellipse(ex, ey, er, ery); fillStroke('#FFFFFF', PLUM, lw);
+      ctx.fillStyle = PLUM; circle(ex + c.px, ey + c.py, pr); ctx.fill();
+      ctx.fillStyle = '#FFFFFF'; circle(ex + c.px - pr * 0.35, ey + c.py - pr * 0.4, pr * 0.35); ctx.fill(); circle(ex + c.px + pr * 0.3, ey + c.py + pr * 0.3, pr * 0.18); ctx.fill();
+      if (face === 'smug') { // cheeky, not grumpy: a 25% lower-lid squint and one small arched brow above the eye
+        ctx.fillStyle = col; ctx.beginPath(); ctx.rect(ex - er - lw, ey + ery * 0.75, er * 2 + lw * 2, ery * 0.25 + lw); ctx.fill();
+        ctx.strokeStyle = PLUM; ctx.lineWidth = lw; ctx.beginPath(); ctx.moveTo(ex - er, ey + ery * 0.75); ctx.lineTo(ex + er, ey + ery * 0.75); ctx.stroke();
+        if (s === 1) { ctx.beginPath(); ctx.moveTo(ex - er * 0.45, ey - ery * 1.3); ctx.quadraticCurveTo(ex, ey - ery * 1.6, ex + er * 0.45, ey - ery * 1.3); ctx.stroke(); }
+      }
+    }
+  }
+  // cheeks
+  ctx.fillStyle = 'rgba(255,120,150,0.35)'; circle(-w * 0.34, -h * 0.4, w * 0.07); ctx.fill(); circle(w * 0.34, -h * 0.4, w * 0.07); ctx.fill();
+  // mouth
+  ctx.strokeStyle = PLUM; ctx.lineWidth = lw; var my = -h * 0.33;
+  if (face === 'antic' || face === 'surprised') { ellipse(0, my, w * 0.07, h * 0.09); fillStroke('#B03A5B', PLUM, lw); }
+  else if (face === 'dizzy' || face === 'grin') {
+    ctx.beginPath(); ctx.arc(0, my - h * 0.03, w * 0.2, 0.15, Math.PI - 0.15); ctx.closePath(); fillStroke('#B03A5B', PLUM, lw);
+    ctx.fillStyle = '#FFFFFF'; ctx.fillRect(-w * 0.14, my - h * 0.02, w * 0.28, h * 0.05);
+  } else if (face === 'tease') {
+    ctx.beginPath(); ctx.arc(0, my - h * 0.02, w * 0.16, 0.2, Math.PI - 0.2); ctx.stroke();
+    ellipse(w * 0.03, my + h * 0.06, w * 0.08, h * 0.07); fillStroke('#FF8FB1', PLUM, 3 * L.S);
+  } else if (face === 'smug') { ctx.beginPath(); ctx.arc(w * 0.05, my - h * 0.03, w * 0.16, 0.25, Math.PI - 0.25); ctx.stroke(); } // wide closed smile, a touch off-centre
+  else { ctx.beginPath(); ctx.arc(0, my - h * 0.03, w * 0.14, 0.3, Math.PI - 0.3); ctx.stroke(); }
+  // dizzy orbit stars
+  if (face === 'dizzy') {
+    ctx.fillStyle = '#FFD166';
+    for (var k = 0; k < 2; k++) { var oa = G.time * 6 + k * Math.PI; star(Math.cos(oa) * w * 0.5, -h * 1.05 + Math.sin(oa) * h * 0.12, w * 0.09, 4, 0.45, oa); ctx.fill(); }
+  }
+}
+function drawCreatureBody(c) {
+  var w = L.creW * c.size, h = creH(c);
+  if (c.type === 'stack') {
+    var lh = layerH(c);
+    for (var i = 0; i < c.layers; i++) {
+      ctx.save(); ctx.translate(0, -i * lh);
+      var sq = (i === c.layers - 1) ? 1 : 1 - 0.08 * (c.layers - 1 - i);
+      ctx.scale(1 + (1 - sq) * 0.5, sq);
+      drawBlob(c, w, h, c.colors[i % 3], false, i === c.layers - 1 ? c.face : 'smile');
+      ctx.restore();
+    }
+    return;
+  }
+  drawBlob(c, w, h, c.color, c.state === 'fly');
+  if (c.type === 'hat' && c.hits === 0) { ctx.save(); ctx.translate(-w * 0.05, -h * 0.98); drawTallHat(w, scene().accent); ctx.restore(); }
+  if (c.type === 'boss') { ctx.save(); ctx.translate(0, -h * 0.97); drawCrown(w * 0.5, 0); ctx.restore(); }
+}
+function drawCreature(c) {
+  ctx.save();
+  if (c.state === 'fly') { ctx.translate(c.fx, c.fy); ctx.rotate(c.rot); drawCreatureBody(c); ctx.restore(); return; }
+  var w = L.creW * c.size, h = creH(c), bob = 0, wig = 0;
+  if (c.dance > 0) { bob = -Math.abs(Math.sin(G.time * 18)) * h * 0.25; wig = Math.sin(G.time * 18) * 0.15; }
+  if (c.come && c.state === 'idle') bob += -Math.abs(Math.sin(G.time * 9)) * h * 0.12;
+  if (c.nuzzle && hero.sit && c.state === 'idle') wig += (hero.x > c.x ? 1 : -1) * (0.22 + Math.sin(G.time * 5) * 0.08); // leans in to nuzzle her
+  if (c.cloud) { ctx.translate(c.x, c.y + bob); ctx.rotate(wig); ctx.scale(c.sx, c.sy * Math.max(0.05, c.up)); drawCreatureBody(c); ctx.restore(); return; }
+  if (c.up < 1 && !c.hop) {
+    ctx.beginPath(); ctx.rect(c.x - L.holeRx * 2.4, -10, L.holeRx * 4.8, L.ground + L.holeRy * 0.35 + 10); ctx.clip();
+    ctx.translate(c.x, c.y + (1 - c.up) * h * 1.25 * (c.type === 'stack' ? c.layers : 1));
+  } else ctx.translate(c.x, c.y + bob);
+  ctx.rotate(wig); ctx.scale(c.sx, c.sy); drawCreatureBody(c);
+  ctx.restore();
+}
+function drawHoleBack(h) {
+  var S = scene();
+  ellipse(h.x, h.y, L.holeRx, L.holeRy); fillStroke(S.dirt, PLUM, 3 * L.S);
+  ctx.fillStyle = 'rgba(0,0,0,0.25)'; ellipse(h.x, h.y - L.holeRy * 0.15, L.holeRx * 0.8, L.holeRy * 0.6); ctx.fill();
+}
+function drawHoleFront(h) {
+  var S = scene();
+  ctx.beginPath(); ctx.ellipse(h.x, h.y, L.holeRx, L.holeRy, 0, 0, Math.PI); ctx.closePath();
+  ctx.fillStyle = S.dirt2; ctx.fill();
+  ctx.beginPath(); ctx.ellipse(h.x, h.y, L.holeRx, L.holeRy, 0, 0, Math.PI); ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S; ctx.stroke();
+}
+function drawHolesAndCreatures() {
+  for (var i = 0; i < L.holes.length; i++) {
+    var h = L.holes[i]; drawHoleBack(h);
+    for (var k = 0; k < CRE.length; k++) { var c = CRE[k]; if (c.hole === i && !c.cloud && !c.hop && c.state !== 'fly') drawCreature(c); }
+    drawHoleFront(h);
+  }
+  for (var j = 0; j < CRE.length; j++) { var c2 = CRE[j]; if ((c2.hop || c2.cloud) && c2.state !== 'fly') drawCreature(c2); }
+}
+
+// ---------- hero (Плыга) --------------------------------------------------------
+var hero = { x: 100, y: 100, vx: 0, vy: 0, air: false, jump: null, fall: null, stack: null, stackIdle: 0, sx: 1, sy: 1, sqHold: 0, landSeq: 0,
+  tilt: 0, spin: 0, dir: 1, face: 'smile', faceT: 0, bop: 0, hammerAng: -0.5, hammerTarget: -0.5, twirl: 0, bunchY: 0, bunchV: 0,
+  retargets: 0, lastA: 0, idleT: 0, twirlT: 0, blinkT: 2, blink: 0, sit: false, yawnT: 0, lastHopT: -9, bounce: 0, airSince: 0 };
+function heroHeadY() { return hero.y - L.heroH * 0.74 * hero.sy; }
+// every landing / pogo / hop x stays this far from the screen edge so her bunches and hammer are never clipped
+function heroClampX(x) { var m = 0.5 * L.heroH + 0.02 * L.W; return clamp(x, m, L.W - m); }
+function startJump(tx, ty, o) {
+  o = o || {};
+  if (hero.jump && hero.jump.target && hero.jump.target !== o.target) hero.jump.target.claimed = false; // a replaced jump releases its claim
+  var sx = hero.x, sy = hero.y, d = dist(sx, sy, tx, ty);
+  if (o.distOverride != null) d = o.distOverride;
+  var D = o.D || clamp(220 + 160 * d / L.U, 220, 380) / 1000;
+  var A = o.A != null ? o.A : Math.max(0.22 * L.U, 0.35 * d, o.Araise || 0);
+  // dive (o.drop): she has been in the air too long because a mashing child keeps restarting her arc before it can
+  // come down, so this jump has no rise at all: a straight 100-220 ms dive onto the target, feet first, so the ПА fires
+  if (o.drop) { D = clamp(100 + 120 * d / L.U, 100, 220) / 1000; A = 0; }
+  var wasAir = hero.air, cur = hero.jump;
+  if (!wasAir || o.pogo) { hero.airSince = G.time; hero.retargets = 0; } // her feet on a head count as a fresh launch (a pogo never seeds a dive)
+  var blend = wasAir ? { vx: hero.vx, vy: hero.vy, t: 0 } : null;
+  if (blend && o.pogo && cur && cur.rise === 0) { blend.vx *= 0.1; blend.vy = 0; } // a pogo off a fast dive: no sideways lunge
+  var j = { sx: sx, sy: sy, tx: tx, ty: ty, D: D, A: A, t: 0, rise: o.drop ? 0 : (o.rise || 0.55), target: o.target || null, pogo: !!o.pogo, spin: !!o.spin,
+    blend: blend, bonked: false, hop: !!o.hop };
+  if (hero.stack) hero.stack.claimed = false; // leaving a stack releases it
+  hero.jump = j; hero.air = true; hero.fall = null; hero.stack = null; hero.sit = false;
+  if (Math.abs(tx - sx) > 2) hero.dir = tx > sx ? 1 : -1;
+  if (!j.pogo && !o.drop) hero.lastA = A;
+  if (wasAir && !j.pogo && !o.hop && !o.drop) hero.retargets = Math.min(12, hero.retargets + 1);
+  if (!j.pogo) { if (o.hop || o.drop) SFX.hop(); else SFX.boing(hero.retargets); }
+  if (!o.noSquash) { hero.sx = 0.7; hero.sy = 1.3; hero.sqHold = 0.04; }
+  if (o.hop) hero.lastHopT = G.time;
+  G.lastJumpT = G.time;
+}
+function spinJump() {
+  startJump(hero.x, L.ground, { A: 0.3 * L.U, D: 0.45, spin: true, distOverride: 0.3 * L.U });
+  ring(hero.x, hero.y - L.heroH * 0.5, 0.18 * L.U, 0.3, 4);
+}
+function land(silent) {
+  hero.air = false; hero.jump = null; hero.fall = null; hero.y = L.ground; hero.vy = 0; hero.vx = 0; hero.retargets = 0; hero.spin = 0; hero.tilt = 0;
+  hero.sx = 1.35; hero.sy = 0.65; hero.landSeq = 0.13; hero.idleT = 0;
+  dust(hero.x, hero.y); if (!silent) SFX.bum(); sproutFlowers(hero.x);
+  G.lastLand = { x: hero.x, y: hero.y };
+  landingBonk();
+}
+// she landed on a creature that was still popping (up < 0.3, not bonkable yet): any contact is a bonk, so it springs to
+// full height under her feet and gets its ПА instead of finishing its pop through her dress
+function landingBonk() {
+  if (G.state !== 'play' || G.boom) return;
+  for (var i = 0; i < CRE.length; i++) {
+    var c = CRE[i];
+    if (c.cloud || c.state !== 'pop' || !(c.up < 0.3) || Math.abs(c.x - hero.x) >= 0.08 * L.U * L.K) continue;
+    c.state = 'idle'; c.t = 0; c.up = 1; c.sx = c.sy = 1;
+    hero.y = topY(c); bonk(c, {}); return;
+  }
+}
+// bonk zone: an ellipse 0.18U wide x 0.09U tall around the head centre, so the ПА fires when her feet
+// really reach the head, not while she is still a creature-height above it
+function checkBonk() {
+  var best = null, bd = 1, rx = 0.18 * L.U * L.K, ry = 0.09 * L.U * L.K;
+  for (var i = 0; i < CRE.length; i++) {
+    var c = CRE[i]; if (!bonkable(c)) continue;
+    var dx = (hero.x - c.x) / rx, dy = (hero.y - headY(c)) / ry, d = dx * dx + dy * dy;
+    if (d < bd) { bd = d; best = c; }
+  }
+  if (best) { if (hero.jump) hero.jump.bonked = true; hero.y = Math.max(hero.y, topY(best)); bonk(best, {}); }
+}
+function arrive(j) {
+  if (j.target) {
+    var c = j.target; c.claimed = false;
+    if (!j.bonked) {
+      if (bonkable(c)) { j.bonked = true; bonk(c, {}); return; }
+      // miss: the creature went away → хлюп, flower, re-pop with a wink
+      SFX.hlyup(); sproutFlowers(j.tx);
+      if (c.hole != null && !c.cloud && (c.state === 'gone' || c.state === 'sink')) SPAWNQ.push({ t: 0.5, hole: c.hole, type: 'ground', wink: 1.2, color: c.color });
+      hero.jump = null; hero.fall = { v: 0 }; hero.vy = 0; return;
+    }
+    return;
+  }
+  if (j.ty >= L.ground - 1) land(false); else { hero.jump = null; hero.fall = { v: 0 }; hero.vy = 0; }
+}
+function updateHero(dt) {
+  if (hero.sqHold > 0) hero.sqHold -= dt;
+  if (hero.landSeq > 0) {
+    hero.landSeq -= dt;
+    if (hero.landSeq > 0.06) { hero.sx = 1.35; hero.sy = 0.65; } else if (hero.landSeq > 0) { hero.sx = 0.9; hero.sy = 1.1; } else { hero.sx = 1; hero.sy = 1; }
+  }
+  hero.blinkT -= dt; if (hero.blinkT <= 0) { hero.blinkT = rnd(2.5, 4.5); hero.blink = 0.12; } if (hero.blink > 0) hero.blink -= dt;
+  if (hero.faceT > 0) { hero.faceT -= dt; if (hero.faceT <= 0) hero.face = 'smile'; else if (hero.face === 'pa' && hero.faceT < 0.3) hero.face = G.combo >= 3 ? 'tongue' : 'squint'; }
+  if (hero.bop > 0) hero.bop -= dt;
+  if (G.boom || (G.trans && G.trans.phase === 'slide')) { /* driven by the boom / the scene slide (whoosh off, drop in) */ }
+  else if (hero.jump) {
+    var j = hero.jump; j.t += dt / j.D; var t = Math.min(1, j.t);
+    if (j.target && bonkable(j.target)) { j.tx = j.target.x; j.ty = topY(j.target); }
+    var hx = j.sx + (j.tx - j.sx) * Math.pow(t, 0.8), off;
+    if (t < j.rise) { var u = t / j.rise; off = j.A * (1 - (1 - u) * (1 - u)); }
+    else { var u2 = (t - j.rise) / (1 - j.rise); off = j.A * (1 - Math.pow(u2, 1.5)); }
+    var nx = hx, ny = j.sy + (j.ty - j.sy) * t - off;
+    if (j.blend) {
+      j.blend.t += dt; var k = clamp(j.blend.t / 0.07, 0, 1), ks = smooth(k);
+      var ox = j.sx + j.blend.vx * j.blend.t, oy = j.sy + j.blend.vy * j.blend.t;
+      nx = lerp(ox, nx, ks); ny = lerp(oy, ny, ks); if (k >= 1) j.blend = null;
+    }
+    hero.vx = (nx - hero.x) / dt; hero.vy = (ny - hero.y) / dt; hero.x = nx; hero.y = ny;
+    if (hero.sqHold <= 0 && hero.landSeq <= 0) { if (t < j.rise) { hero.sx = 0.8; hero.sy = 1.25; } else { hero.sx = 0.9; hero.sy = 1.15; } }
+    hero.tilt = clamp(hero.vx / (L.U * 2.5), -1, 1) * 18 * DEG;
+    if (j.spin) hero.spin = smooth(t) * TAU;
+    hero.hammerTarget = t < 0.7 ? -2.3 : 0.6; // swings back in flight (drawn over the back bunch so it stays visible)
+    if (hero.vy > 0) checkBonk();
+    if (hero.jump === j && t >= 1 && !G.hitStop) arrive(j);
+  } else if (hero.fall) {
+    hero.vy += 3200 * L.S * dt; hero.y += hero.vy * dt; hero.sx = 0.9; hero.sy = 1.15;
+    checkBonk();
+    if (hero.fall && hero.y >= L.ground) { hero.y = L.ground; land(false); }
+  } else if (hero.stack) {
+    var c = hero.stack; // safety net: a stack she is no longer standing over (moved by a remap, a boom...) drops her
+    if (c.state === 'gone' || c.layers <= 0 || Math.abs(hero.x - c.x) > L.creW) { c.claimed = false; hero.stack = null; hero.air = true; hero.airSince = G.time; hero.fall = { v: 0 }; hero.vy = 0; }
+    else { hero.y = topY(c) + creH(c) * 0.05; hero.stackIdle += dt; if (hero.stackIdle > 1.5) { hero.stackIdle = 1.1; popLayer(); } }
+    hero.tilt = 0;
+  } else {
+    hero.air = false; hero.idleT += dt; hero.twirlT += dt; hero.tilt *= 0.8; hero.y = L.ground;
+    if (hero.landSeq <= 0 && hero.sqHold <= 0) {
+      var amp = hero.idleT > 3 ? 0.1 : 0.06, b = 0.5 + 0.5 * Math.sin(hero.idleT * 1.6 * TAU);
+      hero.sx = 1 - amp * 0.4 * b; hero.sy = 1 + amp * b;
+    }
+    if (hero.twirlT > 4) { hero.twirlT = 0; hero.twirl = 0.5; }
+    hero.hammerTarget = hero.bop > 0 ? 0.9 : -0.5;
+    if (hero.sit) { hero.yawnT += dt; }
+  }
+  if (hero.twirl > 0) { hero.twirl -= dt; hero.hammerAng -= dt * TAU / 0.5; } else hero.hammerAng += (hero.hammerTarget - hero.hammerAng) * Math.min(1, dt * 14);
+  // bunch spring (lags vertical motion)
+  var target = clamp(-hero.vy * 0.025, -L.heroH * 0.12, L.heroH * 0.12);
+  hero.bunchV = (hero.bunchV + (target - hero.bunchY) * 0.25) * 0.6; hero.bunchY += hero.bunchV;
+  if (hero.bounce > 0) hero.bounce -= dt;
+}
+function pogo(c) {
+  var near = null, nd = 1e9;
+  for (var i = 0; i < CRE.length; i++) { var o = CRE[i]; if (o !== c && isLive(o) && !(o.inv > 0)) { var d = Math.abs(o.x - hero.x); if (d < nd) { nd = d; near = o; } } }
+  var drift = near ? (near.x - hero.x) * 0.25 : 0;
+  // a stay-creature (boss, hatter) was just hit and is invulnerable: hop clear of it so one tap cannot chain all its hits
+  if (c && c.stay) { var away = (near ? near.x : L.W / 2) > c.x ? 1 : -1; drift = away * 0.22 * L.U * L.K + (near ? (near.x - hero.x) * 0.1 : 0); }
+  var A = Math.max(0.38 * (hero.lastA || 0.22 * L.U), 0.08 * L.U);
+  startJump(heroClampX(hero.x + drift), L.ground, { A: A, D: 0.32, rise: 0.5, pogo: true, noSquash: true });
+  hero.sx = 0.8; hero.sy = 1.25;
+}
+// the full bonk sequence (§4)
+function bonk(c, o) {
+  if (!c || !bonkable(c)) return;
+  o = o || {};
+  var now = G.pt;
+  if (now - G.lastBonkT <= 1.2) G.combo++; else G.combo = 1;
+  G.lastBonkT = now; if (G.combo >= 3) G.last3T = now;
+  var step = PENTA[Math.min(G.combo - 1, 7)] + (o.extraStep || 0);
+  var hx = c.x, hy = headY(c), ex = hx, ey = hy - 0.15 * L.U;
+  // star + ring 0.15U above the impact (spec); the text goes a hero-height higher so her face stays clear of it
+  SFX.pa(step, G.combo); impactStar(ex, ey); ring(ex, ey);
+  // sequential boom bonks 60 ms apart: a string spawned < 0.3 s ago just pulses instead of being replaced
+  var pulsed = false;
+  if (o.noStop) for (var ti = 0; ti < TEXTS.length; ti++) { var tt = TEXTS[ti]; if (tt.tag === 'pa' && tt.die == null && tt.t < 0.3) { tt.pulse = 0.12; pulsed = true; } }
+  // the string sits just over her head at the pogo apex (feet at topY - apex, head a hero-height higher)
+  var apex = Math.max(0.38 * (hero.lastA || 0.22 * L.U), 0.08 * L.U);
+  if (!pulsed) bonkText(G.combo, ex, topY(c) - apex - 1.2 * L.heroH, !!o.noStop, c.cloud ? c.cloud.top + c.cloud.h * 0.75 : null);
+  c.claimed = false; c.come = false; c.nuzzle = false; c.face = 'grin';
+  var popped = null;
+  if (c.type === 'stack') {
+    popped = { type: 'ground', color: c.colors[(c.layers - 1) % 3], state: 'fly', t: 0, fx: c.x, fy: topY(c) + creH(c) * 0.95, x: c.x, y: c.y, up: 1, sx: 1, sy: 1,
+      size: 1, face: 'dizzy', px: 0, py: 0, ph: c.ph, vx: rnd(-0.3, 0.3) * L.U, vy: -(c.y + 0.35 * L.U) / 0.45, rot: 0, hole: null, cloud: null, dance: 0, wink: 0, life: 1, layers: 0, hits: 0, inv: 0 };
+    CRE.push(popped); SFX.giggle(); SFX.fly();
+    c.layers--; c.sy = 0.8; c.sx = 1.2;
+    if (c.layers <= 0) c.state = 'gone';
+    // she mounts the stack only when the bonk is HERS (landing / her tap); a remote bonk from the big boom or the
+    // combo-8 cascade (o.noPogo) just pops the layer and leaves her where she is
+    else if (!o.noPogo) { hero.jump = null; hero.fall = null; hero.air = false; hero.stack = c; hero.stackIdle = 0; hero.y = topY(c); hero.sx = 1.3; hero.sy = 0.7; hero.landSeq = 0.1; c.claimed = true; c.life = Math.max(c.life, 2); }
+  } else {
+    // pancake 1.6w/0.3h with a big grin (spiral eyes only from f4, see runAfterStop)
+    c.state = 'pancake'; c.t = 0; c.sx = 1.6; c.sy = 0.3; c.stay = false;
+    if (c.type === 'hat' && c.hits === 0) { c.hits = 1; c.stay = true; c.inv = 0.8; spawnP({ k: 'hat', x: c.x, y: c.y - creH(c) * 0.98, vx: rnd(-0.4, 0.4) * L.U, vy: -0.9 * L.U, rot: 0, vr: rnd(-12, 12), w: L.creW, col: scene().accent, life: 1.2 }); }
+    else if (c.type === 'boss') { c.hits++; if (c.hits < 3) { c.stay = true; c.inv = 0.8; c.size *= 0.75; } else { confetti(c.x, hy, 30, 1); G.floaters.push({ kind: 'crown', t: 0, x: c.x, y: hy }); } }
+  }
+  hero.bop = 0.25; hero.face = 'pa'; hero.faceT = 0.6; hero.hammerAng = 0.9;
+  G.hitStop = o.noStop ? 0 : (G.combo >= 3 ? 0.09 : 0.05);
+  G.afterStop.push({ c: c, combo: G.combo, x: hx, y: hy, noPogo: !!o.noPogo || (hero.stack === c) });
+  if (o.noStop) runAfterStop();
+  G.bonks++; G.sceneBonks++; G.tapsSinceBonk = 0; G.magnet = 0.26; G.idleT = 0;
+  G.stars++; SFX.din(G.stars - 1); G.starPop[G.stars - 1] = 0.25;
+  if (G.stars >= 10 && !G.celeb) celebrate();
+  if (G.combo === 3) { SFX.drumfill(); G.zoom = 1.03; for (var i = 0; i < CRE.length; i++) CRE[i].dance = 0.6; }
+  if (G.combo === 5) rainbowBurst(ex, ey);
+  if (G.combo === 8) { G.rainbow = { t: 0 }; G.bowSparkle = 10; bonkAll(c); }
+  if (G.bonks === 10) G.floaters.push({ kind: 'wreath', t: 0, x: hero.x, y: -0.1 * L.H });
+  if (G.bonks === 50) G.floaters.push({ kind: 'ears', t: 0, x: hero.x, y: -0.1 * L.H });
+  if (G.bonks === 100) G.floaters.push({ kind: 'hat', t: 0, x: hero.x, y: -0.1 * L.H });
+  if (G.bonks > 0 && G.bonks % 25 === 0) { G.transPending++; G.transReqT = G.pt; }
+  if (G.bonks >= 60 && (G.bonks - 60) % 40 === 0) G.bossPending = true;
+}
+function runAfterStop() {
+  var q = G.afterStop; G.afterStop = [];
+  for (var i = 0; i < q.length; i++) {
+    var e = q[i];
+    shake(e.combo >= 3 ? 7 : 4); confetti(e.x, e.y, 8, 1);
+    if (e.c.state === 'pancake' || e.c.state === 'spring') e.c.face = 'dizzy';
+    if (!e.noPogo && !hero.stack && !G.boom) pogo(e.c);
+  }
+}
+function bonkAll(except) {
+  var list = CRE.filter(function (c) { return c !== except && bonkable(c); });
+  for (var i = 0; i < list.length; i++) G.boomQ.push({ t: 0.06 * (i + 1), c: list[i] });
+}
+function popLayer() {
+  var c = hero.stack; if (!c || c.layers <= 0) { hero.stack = null; return; }
+  var idx = Math.max(0, 3 - c.layers);
+  hero.stackIdle = 0;
+  bonk(c, { extraStep: [0, 4, 7][Math.min(2, idx)] });
+  if (c.layers <= 0) { hero.stack = null; hero.air = true; hero.airSince = G.time; hero.fall = { v: 0 }; hero.vy = 0; }
+}
+function shake(px) { G.shakeAmp = Math.min(12 * L.S, Math.max(G.shakeAmp, px * L.S)); G.shakeT = 0; }
+// ---------- hero drawing ---------------------------------------------------------
+function drawArm(x0, y0, x1, y1, h) {
+  ctx.lineCap = 'round'; ctx.strokeStyle = PLUM; ctx.lineWidth = h * 0.11; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+  ctx.strokeStyle = '#FFD7B8'; ctx.lineWidth = h * 0.065; ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+}
+// the squeaky toy: handle 0.42h (~0.09U) from the hand, head 0.36h x 0.26h (~0.06U x 0.045U), per-scene variants
+function drawHammer(h, hx, hy, a) {
+  var ex = hx + Math.cos(a) * h * 0.42, ey = hy + Math.sin(a) * h * 0.42, lw = 4 * L.S;
+  ctx.strokeStyle = PLUM; ctx.lineCap = 'round'; ctx.lineWidth = h * 0.11; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.strokeStyle = '#D9A066'; ctx.lineWidth = h * 0.065; ctx.beginPath(); ctx.moveTo(hx, hy); ctx.lineTo(ex, ey); ctx.stroke();
+  ctx.save(); ctx.translate(ex, ey); ctx.rotate(a + Math.PI / 2);
+  var hw = h * 0.36, hh = h * 0.26;
+  if (G.scene === 1) { // beach: a happy fish
+    ellipse(0, 0, hw * 0.42, hh * 0.45); fillStroke('#4CC9F0', PLUM, lw);
+    ctx.beginPath(); ctx.moveTo(hw * 0.3, 0); ctx.lineTo(hw * 0.58, -hh * 0.45); ctx.lineTo(hw * 0.58, hh * 0.45); ctx.closePath(); fillStroke('#4CC9F0', PLUM, lw);
+    ctx.fillStyle = '#FFFFFF'; circle(-hw * 0.18, -hh * 0.1, hh * 0.16); ctx.fill(); ctx.fillStyle = PLUM; circle(-hw * 0.16, -hh * 0.1, hh * 0.08); ctx.fill();
+    ctx.strokeStyle = PLUM; ctx.lineWidth = 2.5 * L.S; ctx.beginPath(); ctx.arc(-hw * 0.3, hh * 0.12, hh * 0.12, 0.2, Math.PI - 0.2); ctx.stroke();
+  } else if (G.scene === 3) { // candy: a swirly lollipop
+    circle(0, 0, hh * 0.55); fillStroke('#FF5E7A', PLUM, lw);
+    ctx.strokeStyle = '#FFFFFF'; ctx.lineWidth = hh * 0.1; ctx.beginPath();
+    for (var i = 0; i <= 36; i++) { var sa = i / 36 * TAU * 2.2, sr = i / 36 * hh * 0.42; var sx = Math.cos(sa) * sr, sy = Math.sin(sa) * sr; if (i) ctx.lineTo(sx, sy); else ctx.moveTo(sx, sy); } ctx.stroke();
+  } else { // meadow / night: striped mallet
+    rrect(-hw / 2, -hh / 2, hw, hh, hh * 0.35); ctx.fillStyle = '#FF5E7A'; ctx.fill();
+    ctx.save(); ctx.clip(); ctx.fillStyle = '#FFD93D'; ctx.fillRect(-hw * 0.3, -hh, hw * 0.13, hh * 2); ctx.fillRect(hw * 0.17, -hh, hw * 0.13, hh * 2); ctx.restore();
+    ctx.strokeStyle = PLUM; ctx.lineWidth = lw; ctx.stroke();
+  }
+  ctx.restore();
+}
+function drawHammerArm(h, a) {
+  var px = h * 0.16, py = -h * 0.45, hx = px + Math.cos(a) * h * 0.24, hy = py + Math.sin(a) * h * 0.24;
+  drawArm(px, py, hx, hy, h);
+  drawHammer(h, hx, hy, a);
+}
+function drawBunch(x, y, h, accent) {
+  circle(x, y, h * 0.175); fillStroke('#5B3A29', PLUM, 4 * L.S);
+  var bx = x > 0 ? x - h * 0.12 : x + h * 0.12, by = y - h * 0.1;
+  ellipse(bx - h * 0.06, by, h * 0.06, h * 0.04, -0.4); fillStroke(accent, PLUM, 3 * L.S);
+  ellipse(bx + h * 0.06, by, h * 0.06, h * 0.04, 0.4); fillStroke(accent, PLUM, 3 * L.S);
+  circle(bx, by, h * 0.03); fillStroke(accent, PLUM, 2 * L.S);
+}
+function drawCosmetic(kind, h, lift) {
+  var y = -h * 1.0 - lift;
+  ctx.lineWidth = 3 * L.S; ctx.strokeStyle = PLUM;
+  if (kind === 'wreath') { // five real flowers (petals round a yellow heart) with leaves between them
+    var cols = ['#FF5E7A', '#FFA6C9', '#FFFFFF', '#B388FF', '#4CC9F0'];
+    for (var i = 0; i < 5; i++) {
+      var a = Math.PI + (i + 0.5) * Math.PI / 5, fx = Math.cos(a) * h * 0.31, fy = -h * 0.76 + Math.sin(a) * h * 0.3;
+      if (i < 4) { var la = Math.PI + (i + 1) * Math.PI / 5; ellipse(Math.cos(la) * h * 0.31, -h * 0.76 + Math.sin(la) * h * 0.3, h * 0.045, h * 0.022, la + Math.PI / 2); fillStroke('#7ED957', PLUM, 2 * L.S); }
+      for (var p = 0; p < 5; p++) { var pa = p * TAU / 5 + i; circle(fx + Math.cos(pa) * h * 0.04, fy + Math.sin(pa) * h * 0.04, h * 0.03); fillStroke(cols[i], PLUM, 2 * L.S); }
+      circle(fx, fy, h * 0.022); fillStroke('#FFD166', PLUM, 2 * L.S);
+    }
+  } else if (kind === 'ears') {
+    for (var s = -1; s <= 1; s += 2) {
+      ctx.beginPath(); ctx.moveTo(s * h * 0.1, y + h * 0.04); ctx.lineTo(s * h * 0.3, y + h * 0.02); ctx.lineTo(s * h * 0.2, y - h * 0.18); ctx.closePath(); fillStroke('#FFA6C9', PLUM, 3 * L.S);
+      ctx.beginPath(); ctx.moveTo(s * h * 0.15, y + h * 0.02); ctx.lineTo(s * h * 0.25, y + h * 0.01); ctx.lineTo(s * h * 0.2, y - h * 0.1); ctx.closePath(); ctx.fillStyle = '#FFD7E5'; ctx.fill();
+    }
+  } else if (kind === 'crown') { drawCrown(h * 0.6, y + h * 0.03); }
+  else if (kind === 'hat') {
+    ctx.beginPath(); ctx.moveTo(-h * 0.14, y + h * 0.04); ctx.lineTo(h * 0.14, y + h * 0.04); ctx.lineTo(0, y - h * 0.32); ctx.closePath(); fillStroke('#4CC9F0', PLUM, 3 * L.S);
+    ctx.save(); ctx.clip(); ctx.fillStyle = '#FFD166'; ctx.fillRect(-h * 0.2, y - h * 0.1, h * 0.4, h * 0.05); ctx.fillRect(-h * 0.2, y - h * 0.22, h * 0.4, h * 0.05); ctx.restore();
+    circle(0, y - h * 0.32, h * 0.045); fillStroke('#FF5E7A', PLUM, 2 * L.S);
+  }
+}
+function drawHero() {
+  var h = L.heroH, lw = 4 * L.S, accent = scene().accent;
+  ctx.save(); ctx.translate(hero.x, hero.y - (hero.bounce > 0 ? Math.sin(hero.bounce / 0.25 * Math.PI) * h * 0.25 : 0));
+  ctx.rotate(hero.tilt + hero.spin); ctx.scale(hero.sx * hero.dir, hero.sy);
+  ctx.lineWidth = lw; ctx.lineJoin = 'round'; ctx.lineCap = 'round'; ctx.strokeStyle = PLUM;
+  var by = hero.bunchY, ham = hero.hammerAng, behind = ham < -1.6, sit = hero.sit;
+  if (sit) { // sit-and-yawn cartoon: hammer lies on the grass beside her, body slumps 8 degrees
+    ctx.save(); ctx.translate(h * 0.42, -h * 0.06); ctx.rotate(-0.15); drawHammer(h, 0, 0, -0.1); ctx.restore();
+    ctx.translate(0, h * 0.1); ctx.rotate(-8 * DEG);
+  }
+  drawBunch(-h * 0.33, -h * 0.8 + by, h, accent);
+  if (behind && !sit) drawHammerArm(h, ham); // swung back: over the back bunch, under the body
+  // legs & boots
+  if (hero.sit) { rrect(h * 0.05, -h * 0.1, h * 0.26, h * 0.12, h * 0.05); fillStroke('#FFD93D', PLUM, lw); rrect(-h * 0.25, -h * 0.09, h * 0.22, h * 0.1, h * 0.05); fillStroke('#FFD93D', PLUM, lw); }
+  else { rrect(-h * 0.2, -h * 0.1, h * 0.17, h * 0.11, h * 0.05); fillStroke('#FFD93D', PLUM, lw); rrect(h * 0.03, -h * 0.1, h * 0.17, h * 0.11, h * 0.05); fillStroke('#FFD93D', PLUM, lw); }
+  // dress
+  ctx.beginPath(); ctx.moveTo(-h * 0.17, -h * 0.52); ctx.lineTo(h * 0.17, -h * 0.52); ctx.quadraticCurveTo(h * 0.3, -h * 0.3, h * 0.31, -h * 0.12);
+  ctx.quadraticCurveTo(0, -h * 0.04 + by * 0.5, -h * 0.31, -h * 0.12); ctx.quadraticCurveTo(-h * 0.3, -h * 0.3, -h * 0.17, -h * 0.52); ctx.closePath();
+  fillStroke('#FF7AA2', PLUM, lw);
+  ctx.beginPath(); ctx.arc(0, -h * 0.5, h * 0.11, 0, Math.PI); ctx.closePath(); fillStroke('#FFFFFF', PLUM, 3 * L.S);
+  // free arm (hangs down while she sits)
+  var armA = sit ? 1.2 : hero.air ? -2.3 : (G.boom ? -2.6 : -0.6 + Math.sin(G.time * 3) * 0.1);
+  drawArm(-h * 0.16, -h * 0.45, -h * 0.16 + Math.cos(armA) * h * 0.2 * -1, -h * 0.45 + Math.sin(armA) * h * 0.2, h);
+  if (sit) drawArm(h * 0.16, -h * 0.45, h * 0.16 + Math.cos(1.2) * h * 0.2, -h * 0.45 + Math.sin(1.2) * h * 0.2, h);
+  // head
+  circle(0, -h * 0.74, h * 0.28); fillStroke('#FFD7B8', PLUM, lw);
+  ctx.save(); circle(0, -h * 0.74, h * 0.28); ctx.clip();
+  ctx.fillStyle = '#5B3A29'; ctx.beginPath(); ctx.moveTo(-h * 0.3, -h * 1.1); ctx.lineTo(h * 0.3, -h * 1.1); ctx.lineTo(h * 0.3, -h * 0.86);
+  ctx.quadraticCurveTo(h * 0.2, -h * 0.8, h * 0.1, -h * 0.86); ctx.quadraticCurveTo(0, -h * 0.78, -h * 0.1, -h * 0.86); ctx.quadraticCurveTo(-h * 0.2, -h * 0.8, -h * 0.3, -h * 0.86); ctx.closePath(); ctx.fill();
+  ctx.restore();
+  drawBunch(h * 0.33, -h * 0.8 + by, h, accent);
+  // face
+  var face = hero.face, blink = hero.blink > 0 || sit; // eyes stay closed for the whole sit
+  for (var s = -1; s <= 1; s += 2) {
+    var ex = s * h * 0.1, ey = -h * 0.76;
+    if (face === 'squint' || face === 'tongue' || blink) { ctx.lineWidth = lw; ctx.beginPath(); ctx.arc(ex, ey + h * 0.02, h * 0.06, Math.PI + 0.2, TAU - 0.2); ctx.stroke(); }
+    else {
+      ellipse(ex, ey, h * 0.07, h * 0.085); fillStroke('#FFFFFF', PLUM, 3 * L.S);
+      ctx.fillStyle = PLUM; circle(ex + h * 0.015, ey + h * 0.01, h * 0.045); ctx.fill();
+      ctx.fillStyle = '#FFFFFF'; circle(ex, ey - h * 0.015, h * 0.018); ctx.fill(); circle(ex + h * 0.025, ey + h * 0.02, h * 0.009); ctx.fill();
+      ctx.lineWidth = 2.5 * L.S; ctx.beginPath(); ctx.moveTo(ex + s * h * 0.07, ey - h * 0.06); ctx.lineTo(ex + s * h * 0.1, ey - h * 0.09); ctx.stroke();
+    }
+  }
+  ctx.fillStyle = 'rgba(255,120,150,0.4)'; circle(-h * 0.18, -h * 0.66, h * 0.04); ctx.fill(); circle(h * 0.18, -h * 0.66, h * 0.04); ctx.fill();
+  ctx.lineWidth = lw;
+  var yawn = sit && hero.yawnT % 3 < 1.0, yo = yawn ? Math.sin(Math.min(1, (hero.yawnT % 3) / 1.0) * Math.PI) : 0;
+  if (yawn) { ellipse(0, -h * 0.57, h * (0.03 + 0.05 * yo), h * (0.03 + 0.1 * yo)); fillStroke('#B03A5B', PLUM, 3 * L.S); } // a big, slow yawn
+  else if (face === 'pa') { ellipse(0, -h * 0.59, h * 0.05, h * 0.065); fillStroke('#B03A5B', PLUM, 3 * L.S); }
+  else if (face === 'tongue') { ctx.beginPath(); ctx.arc(0, -h * 0.62, h * 0.07, 0.2, Math.PI - 0.2); ctx.stroke(); ellipse(h * 0.01, -h * 0.56, h * 0.035, h * 0.03); fillStroke('#FF8FB1', PLUM, 2 * L.S); }
+  else if (face === 'squint') { ctx.beginPath(); ctx.arc(0, -h * 0.62, h * 0.07, 0.2, Math.PI - 0.2); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.arc(0, -h * 0.62, h * 0.045, 0.3, Math.PI - 0.3); ctx.stroke(); }
+  // cosmetics stack
+  var lift = 0;
+  if (G.cos.wreath) drawCosmetic('wreath', h, 0);
+  if (G.cos.ears) { drawCosmetic('ears', h, lift); }
+  if (G.cos.crown) { drawCosmetic('crown', h, lift); lift += h * 0.1; }
+  if (G.cos.hat) { drawCosmetic('hat', h, lift); }
+  if (!behind && !sit) drawHammerArm(h, ham);
+  ctx.restore();
+}
+
+// ---------- input ----------------------------------------------------------------
+var IN = { ptrs: {}, nptr: 0, queue: [], taps: [], keys: {}, boomHoldDone: false };
+function countPtrs() { var n = 0; for (var k in IN.ptrs) n++; IN.nptr = n; return n; }
+function ptrDown(id, x, y, width) {
+  var t = performance.now();
+  IN.ptrs[id] = { x: x, y: y, sx: x, sy: y, t: t, moved: false };
+  var n = countPtrs();
+  audioUnlock();
+  IN.queue.push({ x: x, y: y, id: id, width: width || 0, n: n });
+}
+function ptrMove(id, x, y) { var p = IN.ptrs[id]; if (!p) return; p.x = x; p.y = y; if (dist(p.sx, p.sy, x, y) > 0.08 * L.U) p.moved = true; }
+// the up-edge of a touch is where Chromium grants user activation: unlock audio (and start the music) here too
+function ptrUp(id) { if (IN.ptrs[id]) delete IN.ptrs[id]; countPtrs(); if (IN.nptr < 2) IN.boomHoldDone = false; gestureExtras(); }
+function gestureExtras() {
+  audioUnlock();
+  if (G.state === 'play' && !A.fsTried && gestureActive()) { // Tier-3 fullscreen, fully guarded (rejections are expected and ignored)
+    A.fsTried = true;
+    try { var el = document.documentElement; if (el.requestFullscreen && !document.fullscreenElement) { var p = el.requestFullscreen(); if (p && p.catch) p.catch(function () {}); } } catch (e) {}
+  }
+}
+function clearPtrs() { IN.ptrs = {}; IN.nptr = 0; IN.boomHoldDone = false; IN.keys = {}; }
+function prevent(e) { if (e.cancelable) e.preventDefault(); }
+if (window.PointerEvent) {
+  canvas.addEventListener('pointerdown', function (e) { prevent(e); try { canvas.setPointerCapture(e.pointerId); } catch (x) {} ptrDown(e.pointerId, e.clientX, e.clientY, e.width); }, { passive: false });
+  canvas.addEventListener('pointermove', function (e) { prevent(e); ptrMove(e.pointerId, e.clientX, e.clientY); }, { passive: false });
+  canvas.addEventListener('pointerup', function (e) { prevent(e); ptrUp(e.pointerId); }, { passive: false });
+  canvas.addEventListener('pointercancel', function (e) { ptrUp(e.pointerId); });
+  canvas.addEventListener('lostpointercapture', function (e) { ptrUp(e.pointerId); });
+} else {
+  canvas.addEventListener('touchstart', function (e) { for (var i = 0; i < e.changedTouches.length; i++) { var t = e.changedTouches[i]; ptrDown('t' + t.identifier, t.clientX, t.clientY, t.radiusX ? t.radiusX * 2 : 0); } }, { passive: false });
+  canvas.addEventListener('touchmove', function (e) { for (var i = 0; i < e.changedTouches.length; i++) { var t = e.changedTouches[i]; ptrMove('t' + t.identifier, t.clientX, t.clientY); } }, { passive: false });
+  var tEnd = function (e) { for (var i = 0; i < e.changedTouches.length; i++) ptrUp('t' + e.changedTouches[i].identifier); };
+  canvas.addEventListener('touchend', tEnd); canvas.addEventListener('touchcancel', tEnd);
+  canvas.addEventListener('mousedown', function (e) { ptrDown('m', e.clientX, e.clientY, 0); });
+  canvas.addEventListener('mousemove', function (e) { ptrMove('m', e.clientX, e.clientY); });
+  window.addEventListener('mouseup', function () { ptrUp('m'); });
+}
+['touchstart', 'touchmove', 'touchend', 'gesturestart', 'gesturechange', 'dblclick', 'contextmenu', 'selectstart'].forEach(function (ev) {
+  document.addEventListener(ev, prevent, { passive: false });
+});
+window.addEventListener('blur', clearPtrs);
+window.addEventListener('keydown', function (e) {
+  var k = e.key || '';
+  if (k === 'Tab' || /^F\d+$/.test(k) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (k === ' ' || k === 'Spacebar' || k === 'ArrowUp' || k === 'ArrowDown' || k === 'ArrowLeft' || k === 'ArrowRight' || k === 'Enter') e.preventDefault();
+  if (e.repeat) return;
+  audioUnlock(); gestureExtras(); G.idleT = 0;
+  if (k === 'm' || k === 'M' || k === 'ь' || k === 'Ь' || k === 'Escape') { toggleMute(); return; }
+  if (k === 'ArrowLeft' || k === 'ArrowRight') { IN.keys[k] = G.time; arrowHop(k === 'ArrowLeft' ? -1 : 1); return; }
+  if (k === 'Enter') { // Enter = big boom; during its cooldown it falls back to a Space jump (plus the «тик»)
+    if (G.state === 'start') { sparkleRing(L.W / 2, L.H / 2); startGame(); return; }
+    sparkleRing(hero.x, heroHeadY());
+    if (!tryBoom()) spaceAction();
+    return;
+  }
+  spaceAction();
+});
+window.addEventListener('keyup', function (e) { delete IN.keys[e.key]; audioUnlock(); });
+function spaceAction() {
+  if (G.state === 'start') { sparkleRing(L.W / 2, L.H / 2); startGame(); return; }
+  var hx = hero.x, hy = heroHeadY();
+  sparkleRing(hx, hy);
+  if (hero.stack) { popLayer(); return; }
+  // Space = leap onto the nearest somebody, however far (a spin in place only when nobody is up): a keyboard child
+  // mashing Space must never be stuck spinning next to an empty hole while the creatures wait two holes away
+  var best = null, bd = 1e9;
+  for (var i = 0; i < CRE.length; i++) {
+    var c = CRE[i]; if (!bonkable(c) || c.x < 0.04 * L.W || c.x > 0.96 * L.W || (c.cloud && hero.y - headY(c) > 0.45 * L.U)) continue;
+    var d = Math.abs(c.x - hx); if (d < bd) { bd = d; best = c; }
+  }
+  if (best) IN.queue.push({ x: best.x, y: headY(best), id: 'k', width: 0, n: 1, key: true });
+  else IN.queue.push({ x: hx, y: hero.y - 0.05 * L.U, id: 'k', width: 0, n: 1, key: true, spin: true });
+}
+function arrowHop(dir) {
+  if (G.state === 'start') { startGame(); return; }
+  var best = null, bd = 1e9;
+  for (var i = 0; i < L.holes.length; i++) { var dx = (L.holes[i].x - hero.x) * dir; if (dx > 0.03 * L.U && dx < bd) { bd = dx; best = L.holes[i]; } }
+  if (!best) return;
+  sparkleRing(best.x, L.ground - 0.05 * L.U);
+  IN.queue.push({ x: best.x, y: L.ground - 0.05 * L.U, id: 'k', width: 0, n: 1, key: true });
+}
+function inMute(x, y) { return dist(x, y, L.muteX, L.muteY) < 32; }
+function drainInput() {
+  var q = IN.queue; if (!q.length) return; IN.queue = [];
+  for (var i = 0; i < q.length; i++) onDown(q[i]);
+}
+// any tap, key or boom ends the idle cartoons: hand hint, butterfly, nuzzling creature, sit-and-yawn
+function wakeHero() {
+  G.idleT = 0; G.hand = null;
+  if (hero.sit) { hero.sit = false; hero.yawnT = 0; }
+  if (G.butterfly) { G.butterfly = null; for (var ni = 0; ni < CRE.length; ni++) CRE[ni].nuzzle = false; }
+}
+function onDown(ev) {
+  var now = performance.now();
+  wakeHero();
+  if (!ev.key) sparkleRing(ev.x, ev.y);
+  if (!ev.key && inMute(ev.x, ev.y)) { toggleMute(); SFX.tik(); return; } // works on the start screen too
+  if (G.state === 'start') { startGame(); return; }
+  if (!ev.key) { IN.taps.push(now); while (IN.taps.length && IN.taps[0] < now - 700) IN.taps.shift(); } // only real finger taps
+  if ((ev.n >= 3 || IN.taps.length >= 6 || ev.width > 60) && !ev.key) { if (tryBoom()) return; }
+  if (G.boom || (G.trans && G.trans.phase === 'slide')) { SFX.tik(); if (G.trans) hero.bounce = 0.25; return; }
+  if (hero.stack) { popLayer(); return; }
+  // already flying at that very creature: «тик», nothing else (no takeoff squash, no magnet growth / mash help)
+  var cj = hero.jump; if (hero.air && cj && cj.target && !cj.pogo && !ev.spin && tapTarget(ev.x, ev.y) === cj.target) { SFX.tik(); return; }
+  G.tapsSinceBonk++;
+  if (G.tapsSinceBonk >= 3) { G.magnet = Math.min(0.7, 0.40 + 0.05 * (G.tapsSinceBonk - 3)); mashHelp(); }
+  hero.sx = 0.7; hero.sy = 1.3; hero.sqHold = 0.04;
+  G.pending = { x: ev.x, y: ev.y, spin: !!ev.spin };
+  if (G.time - G.lastJumpT < 0.09) SFX.tik();
+}
+function mashHelp() {
+  var lx = G.lastLand.x, best = null, bd = 1e9;
+  for (var i = 0; i < CRE.length; i++) { var c = CRE[i]; if (!bonkable(c) || c.cloud || c.hop) continue; var d = Math.abs(c.x - lx); if (d < bd) { bd = d; best = c; } }
+  if (best && bd > 0.1 * L.U) hopToward(best, lx);
+}
+// the bonkable creature a tap means: the nearest head within the magnet radius (grows while a child keeps missing)
+function tapTarget(x, y) {
+  var best = null, bd = G.magnet * L.U;
+  for (var i = 0; i < CRE.length; i++) { var c = CRE[i]; if (!bonkable(c) || c.x < 0.04 * L.W || c.x > 0.96 * L.W) continue; var d = dist(x, y, c.x, headY(c)); if (d < bd) { bd = d; best = c; } }
+  return best;
+}
+function doTap(p) {
+  var U = L.U, cur = hero.jump;
+  // in the air for longer than one jump, or already re-aimed once in this flight (mash taps keep restarting the arc):
+  // this jump is a dive, not a new rise. A pogo counts as a fresh launch, so a tap while she bounces is a normal arc
+  var drop = hero.air && (G.time - hero.airSince > 0.45 || hero.retargets >= 1);
+  if (p.spin) {
+    if (hero.air && cur && cur.spin) { SFX.tik(); return; } // mashed Space: one spin at a time, she never climbs
+    if (cur && cur.target) cur.target.claimed = false;
+    if (drop) { // Space after a long flight: dive onto the nearest head under her, or straight down to the ground
+      var dn = null, dd = 0.18 * U * L.K;
+      for (var q = 0; q < CRE.length; q++) { var cq = CRE[q]; if (!bonkable(cq) || cq.cloud) continue; var dq = Math.abs(cq.x - hero.x); if (dq < dd) { dd = dq; dn = cq; } }
+      if (dn) { dn.claimed = true; startJump(dn.x, topY(dn), { target: dn, drop: true }); }
+      else startJump(hero.x, L.ground, { drop: true, distOverride: L.ground - hero.y });
+      return;
+    }
+    spinJump(); return;
+  }
+  var best = tapTarget(p.x, p.y);
+  // she is already flying at that very creature: let her arrive and land on it (restarting the arc would keep her hovering)
+  if (best && cur && cur.target === best && hero.air && !cur.pogo) { SFX.tik(); return; }
+  if (cur && cur.target) cur.target.claimed = false;
+  // a dive at a creature ABOVE her would be a straight rise through its body: that one keeps the normal arc
+  if (best) { best.claimed = true; startJump(best.x, topY(best), { target: best, drop: drop && topY(best) >= hero.y - 0.05 * U }); return; }
+  // a creature that is live but momentarily not bonkable (hat / boss grace, pancake, spring): land beside it, not through it
+  var near = null, nd = G.magnet * U;
+  for (var k = 0; k < CRE.length; k++) {
+    var c2 = CRE[k]; if (c2.cloud || !((isLive(c2) && c2.inv > 0) || c2.state === 'pancake' || c2.state === 'spring')) continue;
+    var d2 = dist(p.x, p.y, c2.x, headY(c2)); if (d2 < nd) { nd = d2; near = c2; }
+  }
+  if (near) { var side = hero.x < near.x ? -1 : 1, bx = heroClampX(near.x + side * (0.5 * L.creW * near.size + 0.4 * L.heroH)); startJump(bx, L.ground, { drop: drop, distOverride: dist(hero.x, hero.y, bx, L.ground) }); return; }
+  if (!hero.air && dist(p.x, p.y, hero.x, hero.y - L.heroH * 0.5) < 0.10 * U) { spinJump(); return; }
+  var tx = heroClampX(clamp(p.x, 0.06 * L.W, 0.94 * L.W)), ty = clamp(p.y, 0.06 * L.H, L.ground);
+  startJump(tx, L.ground, { Araise: L.ground - ty + 0.02 * U, distOverride: dist(hero.x, hero.y, tx, ty), drop: drop });
+}
+function updatePointers() {
+  var now = performance.now(), n = IN.nptr, first = null, heldBoth = n >= 2;
+  for (var id in IN.ptrs) { var p = IN.ptrs[id]; if (!first) first = p; if (now - p.t < 150) heldBoth = false; }
+  if (n >= 2 && heldBoth && !IN.boomHoldDone) { IN.boomHoldDone = true; sparkleRing(first.x, first.y); tryBoom(); }
+  if (!first || G.boom || G.state !== 'play' || hero.stack || (G.trans && G.trans.phase === 'slide')) return;
+  var held = now - first.t;
+  if (first.moved) {
+    if (!hero.air && G.time - hero.lastHopT > 0.05) {
+      var dx = first.x - hero.x;
+      if (Math.abs(dx) > 0.02 * L.U) { var step = clamp(dx, -0.25 * L.U, 0.25 * L.U); startJump(heroClampX(hero.x + step), L.ground, { D: 0.18, A: 0.12 * L.U, hop: true }); G.pending = null; }
+    }
+  } else if (held > 450 && !hero.air && G.time - hero.lastHopT > 0.25) { // ~4 hops/s (lastHopT = hop start, hop = 0.18 s)
+    startJump(heroClampX(first.x), L.ground, { D: 0.18, A: 0.14 * L.U, hop: true }); G.pending = null;
+    goldSparks(hero.x, hero.y - L.heroH, 4, 0.08 * L.U); dust(hero.x, hero.y);
+  }
+  for (var k in IN.keys) { if (G.time - IN.keys[k] >= 0.18) { IN.keys[k] = G.time; arrowHop(k === 'ArrowLeft' ? -1 : 1); } }
+}
+// ---------- big boom ---------------------------------------------------------------
+function tryBoom() {
+  if (G.state !== 'play' || G.boom || G.boomCd > 0 || G.trans) { SFX.tik(); return false; } // never during conga/slide
+  if (hero.stack) hero.stack.claimed = false;
+  if (hero.jump && hero.jump.target) hero.jump.target.claimed = false; // the boom cancels the jump: release its claim
+  G.boom = { t: 0, phase: 'up', sx: hero.x, sy: hero.y }; G.boomCd = 2.5; G.boomQ.length = 0;
+  hero.jump = null; hero.fall = null; hero.stack = null; hero.air = true; G.pending = null; wakeHero();
+  if (G.intro) G.intro.jumped = true; // a 3-finger slam on the start screen: the boom bonks the intro creature itself, no stale auto-jump
+  SFX.boing(5); SFX.boing(9);
+  return true;
+}
+function updateBoom(dt) {
+  var b = G.boom; b.t += dt;
+  var topY2 = Math.max(L.safe.t + 0.1 * L.H + L.heroH, L.starY + L.starSize * 2.1 + 0.03 * L.H + 1.4 * L.heroH); // head under the counter
+  if (b.phase === 'up') { var p = Math.min(1, b.t / 0.2); hero.x = lerp(b.sx, L.W / 2, easeOut(p)); hero.y = lerp(b.sy, topY2, easeOut(p)); hero.sx = 0.7; hero.sy = 1.4; hero.hammerTarget = -2.6; if (p >= 1) { b.phase = 'hang'; b.t = 0; } }
+  else if (b.phase === 'hang') { hero.sx = 1.1; hero.sy = 0.9; hero.hammerAng = -2.6; if (b.t >= 0.12) { b.phase = 'down'; b.t = 0; } }
+  else if (b.phase === 'down') { var q = Math.min(1, b.t / 0.12); hero.y = lerp(topY2, L.ground, easeIn(q)); hero.sx = 0.8; hero.sy = 1.3; hero.hammerAng = 0.9; if (q >= 1) { b.phase = 'pound'; b.t = 0; pound(); } }
+  else if (b.phase === 'pound') { if (!G.boomQ.length && b.t > 0.3) { G.boom = null; hero.air = false; hero.y = L.ground; hero.vy = 0; hero.vx = 0; } }
+}
+function pound() {
+  hero.y = L.ground; hero.air = false; hero.jump = null; hero.fall = null; hero.vy = 0; hero.vx = 0; hero.sx = 1.5; hero.sy = 0.5; hero.landSeq = 0.13;
+  ring(hero.x, hero.y, 0.8 * L.U, 0.5, 10); ring(hero.x, hero.y, 0.4 * L.U, 0.3, 8);
+  G.ripple = 1; shake(12); confetti(hero.x, hero.y - L.heroH, 40, 1.2); SFX.bigboom(); dust(hero.x, hero.y);
+  for (var i = 0; i < L.holes.length; i++) sproutFlowers(L.holes[i].x);
+  var list = CRE.filter(bonkable).sort(function (a, b) { return Math.abs(a.x - hero.x) - Math.abs(b.x - hero.x); });
+  for (var k = 0; k < list.length; k++) G.boomQ.push({ t: 0.1 + 0.06 * k, c: list[k] });
+}
+// ---------- start → play intro -------------------------------------------------------
+function startGame() {
+  if (G.state !== 'start') return;
+  G.state = 'play'; audioUnlock(); musicStart(); speak('Плыг!');
+  G.intro = { t: 0, hole: nearestHoleIdx(L.W / 2), spawned: false, jumped: false, second: false };
+  G.pt = 0; G.lastBonkT = 0; G.comeT = 0;
+  try { canvas.focus({ preventScroll: true }); } catch (e) {}
+}
+function updateIntro(dt) {
+  var it = G.intro; it.t += dt;
+  if (!it.spawned && it.t >= 0.15) { it.spawned = true; it.c = makeCreature({ type: 'ground', hole: it.hole, color: '#9DF2D6' }); }
+  if (!it.jumped && it.t >= 0.3 && it.c && !G.boom) { it.jumped = true; it.c.claimed = true; startJump(it.c.x, topY(it.c), { target: it.c }); }
+  if (!it.second && it.t >= 1.0) {
+    it.second = true;
+    var far = 0, fd = -1; for (var i = 0; i < L.holes.length; i++) { var d = Math.abs(L.holes[i].x - hero.x); if (d > fd && holeFree(i)) { fd = d; far = i; } }
+    var c = spawnOne({ hole: far, type: 'ground' }); if (c) G.hand = { c: c, t: 0, tik: 0 };
+  }
+  if (it.t >= 1.5) G.intro = null;
+}
+// ---------- celebration (every 10 bonks) -----------------------------------------------
+function celebrate() {
+  // the gold star and «УРА!» gather at the top centre, unless she is bouncing right there: then to the side away from her
+  var ux = L.W / 2, uh = textW('УРА!', 0.13 * L.U) * 0.65 + 0.02 * L.W;
+  if (Math.abs(hero.x - L.W / 2) < 0.28 * L.W) ux = clamp(hero.x < L.W / 2 ? L.W / 2 + 0.25 * L.W : L.W / 2 - 0.25 * L.W, uh, L.W - uh);
+  G.celeb = { t: 0, gold: false, sticker: false, done: false, ux: ux }; G.rainbow = { t: 0 };
+  for (var i = 0; i < CRE.length; i++) CRE[i].dance = 1.5;
+  SFX.rowFull(); speak('Ура!');
+}
+function updateCeleb(dt) {
+  var c = G.celeb; c.t += dt;
+  if (!c.gold && c.t >= 0.5) { c.gold = true; G.stars = Math.max(0, G.stars - 10); G.starPop.splice(0, 10); SFX.ura(); for (var k = 0; k < TEXTS.length; k++) if (TEXTS[k].tag === 'pa' && TEXTS[k].die == null) TEXTS[k].die = 0; popText('УРА!', c.ux, 0.42 * L.H, 0.13 * L.U, '#FFFFFF', 0, 'ura'); goldSparks(c.ux, 0.3 * L.H, 16, 0.2 * L.U); }
+  if (!c.sticker && c.t >= 1.0) { c.sticker = true; }
+  if (!c.done && c.t >= 1.5) { c.done = true; if (G.album.length < 12) { G.album.push(pick(CRE_COLORS)); store.set('plyg.album', G.album); } SFX.shlep(); goldSparks(albumSlotX(G.album.length - 1), L.albumY, 8, 0.05 * L.U); }
+  if (c.t >= 1.6) G.celeb = null;
+}
+function albumSlotX(i) { var n = Math.max(1, Math.min(12, G.album.length)), sp = 0.07 * L.U; return L.W / 2 - (n - 1) * sp / 2 + i * sp; }
+// ---------- scene transition (every 25 bonks) ------------------------------------------
+function startTransition() {
+  G.transPending = Math.max(0, G.transPending - 1);
+  var n = clamp(G.sceneBonks, 3, 8), conga = [];
+  for (var i = 0; i < n; i++) conga.push({ col: CRE_COLORS[i % 5], x: -0.1 * L.W - i * 0.14 * L.U, ph: i * 0.7 });
+  G.trans = { t: 0, phase: 'conga', from: G.scene, to: (G.scene + 1) % 4, conga: conga, landed: false };
+  for (var k = 0; k < CRE.length; k++) { var c = CRE[k]; if (isLive(c) && !c.claimed) { c.state = 'sink'; c.t = 0; } }
+  SPAWNQ.length = 0;
+}
+function updateTrans(dt) {
+  var tr = G.trans; tr.t += dt;
+  if (tr.phase === 'conga') {
+    var speed = (L.W + 1.2 * L.W) / 1.2;
+    for (var i = 0; i < tr.conga.length; i++) tr.conga[i].x += speed * dt;
+    if (tr.t >= 1.2) { tr.phase = 'slide'; tr.t = 0; CRE.length = 0; for (var k = 0; k < CLOUDS.length; k++) CLOUDS[k].rider = null; if (!BG[tr.to]) buildBg(tr.to); G.boom = null; G.boomQ.length = 0; tr.hx = hero.x; hero.jump = null; hero.fall = null; hero.stack = null; hero.air = true; G.pending = null; SFX.boing(7); }
+  } else {
+    var p = Math.min(1, tr.t / 0.8);
+    if (p < 0.4) { var q = p / 0.4; hero.x = lerp(tr.hx, L.W + 0.3 * L.U, easeIn(q)); hero.y = L.ground - Math.sin(q * Math.PI) * 0.3 * L.U; hero.sx = 0.75; hero.sy = 1.3; hero.dir = 1; hero.tilt = 18 * DEG; hero.hammerTarget = -2.3; }
+    else { var r = (p - 0.4) / 0.6; hero.x = L.W / 2; hero.y = lerp(-0.2 * L.H, L.ground, easeIn(r)); hero.sx = 0.8; hero.sy = 1.25; hero.tilt = 0; hero.hammerTarget = 0.6; }
+    if (p >= 1 && !tr.landed) {
+      tr.landed = true; G.scene = tr.to; G.sceneBonks = 0; G.trans = null; G.transDoneT = G.pt;
+      hero.air = false; hero.jump = null; hero.y = L.ground; hero.sx = 1.6; hero.sy = 0.45; hero.landSeq = 0.13;
+      popText('БУМ!', L.W / 2, L.ground - 0.3 * L.U, 0.13 * L.U, '#FFFFFF', 0); SFX.bum(); dust(hero.x, hero.y); shake(7); sproutFlowers(hero.x);
+      spawnOne({ hole: 1 }); spawnOne({ hole: L.holes.length - 2 }); G.spawnT = 1.0;
+    }
+  }
+}
+function drawConga() {
+  var tr = G.trans; if (!tr || tr.phase !== 'conga') return;
+  for (var i = 0; i < tr.conga.length; i++) {
+    var b = tr.conga[i], bob = Math.abs(Math.sin(G.time * 8 + b.ph)) * 0.1 * L.U;
+    ctx.save(); ctx.translate(b.x, L.ground - bob); ctx.rotate(Math.sin(G.time * 8 + b.ph) * 0.12);
+    drawBlob({ ph: b.ph, px: 0, py: 0, wink: 0, face: 'grin' }, L.creW, creH({ size: 1 }), b.col, true);
+    ctx.restore();
+  }
+}
+// ---------- cosmetics floating down, hand hint, idle cartoon ------------------------------
+function updateFloaters(dt) {
+  for (var i = G.floaters.length - 1; i >= 0; i--) {
+    var f = G.floaters[i]; f.t += dt;
+    var p = Math.min(1, f.t / 1.2), ty = heroHeadY() - L.heroH * 0.3;
+    f.x = lerp(f.x, hero.x, 0.1); f.y = lerp(f.y0 == null ? (f.y0 = f.y) : f.y0, ty, smooth(p));
+    if (p >= 1) { G.floaters.splice(i, 1); G.cos[f.kind] = true; store.set('plyg.cos', G.cos); SFX.ding(); goldSparks(hero.x, ty, 12, 0.12 * L.U); ring(hero.x, ty, 0.15 * L.U, 0.3, 4); }
+  }
+}
+function drawFloaters() {
+  for (var i = 0; i < G.floaters.length; i++) { var f = G.floaters[i]; ctx.save(); ctx.translate(f.x, f.y + L.heroH); ctx.rotate(Math.sin(f.t * 4) * 0.15); drawCosmetic(f.kind, L.heroH, 0); ctx.restore(); }
+}
+function handCandidates() { // creatures the cartoon hand may point at: bonkable, not coming to her, not beside her
+  var far = CRE.filter(function (c) { return bonkable(c) && !c.come && Math.abs(c.x - hero.x) > 0.12 * L.U; });
+  var any = CRE.filter(function (c) { return bonkable(c) && !c.come; });
+  return far.length ? far : any.length ? any : CRE.filter(bonkable);
+}
+function updateIdle(dt) {
+  if (G.state !== 'play' || G.intro) return;
+  G.idleT += dt;
+  if (G.hand) {
+    G.hand.t += dt; G.hand.tik += dt;
+    if (G.hand.tik >= 0.5) { G.hand.tik = 0; SFX.tik(); }
+    if (!bonkable(G.hand.c) || G.hand.c.come || Math.abs(G.hand.c.x - hero.x) < 0.12 * L.U) { var alt = handCandidates(); G.hand = alt.length ? { c: alt[0], t: G.hand.t, tik: G.hand.tik } : null; }
+  } else if (G.idleT > 9 && !hero.air) {
+    var cands = handCandidates();
+    if (cands.length) G.hand = { c: cands[0], t: 0, tik: 0 };
+  }
+  if (G.idleT > 20 && !hero.sit && !hero.air && !hero.stack) {
+    hero.sit = true; hero.yawnT = 0; SFX.yawn();
+    G.butterfly = { t: 0, x: hero.x - 0.3 * L.U, y: hero.y - 0.4 * L.U };
+    var near = null, nd = 1e9; for (var i = 0; i < CRE.length; i++) { var c = CRE[i]; if (!bonkable(c) || c.cloud) continue; var d = Math.abs(c.x - hero.x); if (d < nd) { nd = d; near = c; } }
+    if (near) { near.come = true; near.nuzzle = true; }
+  }
+  if (G.butterfly) { // flutters in over 3 s, then sits on top of her head
+    var b = G.butterfly; b.t += dt; var p = Math.min(1, b.t / 3), bs = 0.03 * L.U * L.K;
+    b.x = lerp(b.x, hero.x, dt * 0.8); b.y = lerp(b.y, heroHeadY() - L.heroH * 0.28 - bs * 0.3, dt * 0.8) + Math.sin(b.t * 7) * (1 - p) * 0.01 * L.U;
+  }
+}
+function drawHand() {
+  var h = G.hand; if (!h || !bonkable(h.c)) return;
+  var c = h.c, press = Math.abs(Math.sin(h.t * Math.PI * 2)) , x = c.x + L.creW * 0.3, y = headY(c) - L.creW * 0.9 + press * L.creW * 0.35, s = L.creW * 0.9;
+  ctx.save(); ctx.translate(x, y); ctx.rotate(-0.3);
+  ctx.lineWidth = 4 * L.S; ctx.strokeStyle = PLUM; ctx.fillStyle = '#FFFFFF';
+  rrect(-s * 0.3, 0, s * 0.6, s * 0.55, s * 0.18); ctx.fill(); ctx.stroke();
+  rrect(-s * 0.26, -s * 0.5, s * 0.22, s * 0.6, s * 0.1); ctx.fill(); ctx.stroke();
+  rrect(-s * 0.3, s * 0.45, s * 0.6, s * 0.14, s * 0.05); fillStroke('#4CC9F0', PLUM, 4 * L.S);
+  ctx.restore();
+}
+function drawButterfly() {
+  var b = G.butterfly; if (!b) return;
+  var landed = b.t >= 3, fl = landed ? 0.8 + 0.2 * Math.sin(b.t * 3) : Math.abs(Math.sin(b.t * 12)) * 0.6 + 0.4, s = 0.03 * L.U * L.K, lw = 2.5 * L.S;
+  ctx.save(); ctx.translate(b.x, b.y);
+  ctx.lineWidth = lw; ctx.strokeStyle = PLUM; ctx.lineCap = 'round';
+  for (var k = -1; k <= 1; k += 2) { // two wings per side, plum outline, one dark dot on the upper wing
+    ctx.save(); ctx.scale(k * fl, 1);
+    ellipse(s * 0.7, -s * 0.3, s * 0.7, s * 0.5, 0.35); fillStroke('#FFA6C9', PLUM, lw);
+    ellipse(s * 0.55, s * 0.4, s * 0.5, s * 0.36, -0.3); fillStroke('#FFD166', PLUM, lw);
+    ctx.fillStyle = PLUM; circle(s * 0.8, -s * 0.35, s * 0.14); ctx.fill();
+    ctx.restore();
+  }
+  ctx.fillStyle = PLUM; ellipse(0, 0.05 * s, s * 0.13, s * 0.55); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(0, -s * 0.5); ctx.quadraticCurveTo(-s * 0.3, -s * 0.9, -s * 0.45, -s * 1.0); ctx.moveTo(0, -s * 0.5); ctx.quadraticCurveTo(s * 0.3, -s * 0.9, s * 0.45, -s * 1.0); ctx.stroke();
+  ctx.restore();
+}
+
+// ---------- main update ------------------------------------------------------------------
+function update(dt) {
+  G.time += dt;
+  // real-time things: particles, texts, shake, zoom, hit-stop, clouds, floaters
+  updateParticles(dt); updateClouds(dt); updateFloaters(dt);
+  G.shakeT += dt; if (G.shakeAmp > 0 && G.shakeT > 0.4) G.shakeAmp = 0;
+  G.zoom += (1 - G.zoom) * Math.min(1, dt * 12);
+  if (G.boomCd > 0) G.boomCd -= dt;
+  if (G.ripple > 0) G.ripple -= dt * 2;
+  if (G.bowSparkle > 0) { G.bowSparkle -= dt; if (Math.random() < dt * 8) goldSparks(hero.x + rnd(-1, 1) * L.heroH * 0.3, heroHeadY() - L.heroH * 0.1, 1, 0.04 * L.U); }
+  if (G.rainbow) { G.rainbow.t += dt; if (G.rainbow.t > 2.5) G.rainbow = null; }
+  for (var i = 0; i < G.starPop.length; i++) if (G.starPop[i] > 0) G.starPop[i] -= dt;
+  if (G.hitStop > 0) { G.hitStop -= dt; if (G.hitStop <= 0) { G.hitStop = 0; runAfterStop(); } return; }
+  // world time
+  G.pt += dt;
+  if (G.pending && G.state === 'play' && !G.boom && G.time - G.lastJumpT >= 0.09) { var p = G.pending; G.pending = null; doTap(p); }
+  if (G.state === 'play') {
+    if (G.intro) updateIntro(dt);
+    if (G.celeb) updateCeleb(dt);
+    if (G.trans) updateTrans(dt);
+    else if (G.transPending > 0 && !G.hitStop && !G.boom && G.pt - G.transDoneT > 1.5 && (!hero.air || G.pt - G.transReqT > 1.5)) startTransition();
+    updateSpawner(dt);
+    updatePointers();
+    if (G.boom) updateBoom(dt);
+    updateIdle(dt);
+    var nxt = (G.scene + 1) % 4; if (G.sceneBonks >= 20 && !BG[nxt] && BGQ.indexOf(nxt) < 0) BGQ.push(nxt); // ready before the slide
+  }
+  updateHero(dt);
+  updateCreatures(dt);
+  // queued sequential bonks (big boom / combo 8), 60 ms apart up the pitch ladder
+  for (var q = G.boomQ.length - 1; q >= 0; q--) { var e = G.boomQ[q]; e.t -= dt; if (e.t <= 0) { G.boomQ.splice(q, 1); if (bonkable(e.c)) bonk(e.c, { noPogo: true, noStop: true }); } }
+}
+// ---------- UI ------------------------------------------------------------------------------
+function drawMute() {
+  var x = L.muteX, y = L.muteY, r = 22;
+  ctx.save(); ctx.globalAlpha = 0.9;
+  circle(x, y, r); fillStroke('#FFFFFF', PLUM, 3 * L.S);
+  ctx.fillStyle = PLUM; ctx.beginPath(); ctx.moveTo(x - r * 0.5, y - r * 0.2); ctx.lineTo(x - r * 0.2, y - r * 0.2); ctx.lineTo(x + r * 0.15, y - r * 0.5); ctx.lineTo(x + r * 0.15, y + r * 0.5); ctx.lineTo(x - r * 0.2, y + r * 0.2); ctx.lineTo(x - r * 0.5, y + r * 0.2); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = PLUM; ctx.lineWidth = 3 * L.S; ctx.lineCap = 'round';
+  if (A.muted) { ctx.strokeStyle = '#FF5E7A'; ctx.beginPath(); ctx.moveTo(x - r * 0.6, y - r * 0.6); ctx.lineTo(x + r * 0.6, y + r * 0.6); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.arc(x + r * 0.2, y, r * 0.35, -0.9, 0.9); ctx.stroke(); ctx.beginPath(); ctx.arc(x + r * 0.2, y, r * 0.6, -0.9, 0.9); ctx.stroke(); }
+  ctx.restore();
+}
+function drawStarRow() {
+  var s = L.starSize, sp = s * 1.4, x0 = L.W / 2 - 4.5 * sp, y = L.starY, c = G.celeb;
+  for (var i = 0; i < 10; i++) {
+    var x = x0 + i * sp, filled = i < G.stars, sc = 1;
+    if (G.starPop[i] > 0) sc = 1 + G.starPop[i] * 2;
+    if (c && !c.gold && i < 10) { var p = smooth(Math.min(1, c.t / 0.5)); x = lerp(x, c.ux, p); y = lerp(L.starY, 0.3 * L.H, p); filled = true; }
+    ctx.save(); ctx.translate(x, y); ctx.scale(sc, sc);
+    star(0, 0, s * 0.55, 5, 0.5, 0);
+    if (filled) fillStroke('#FFD166', PLUM, 3 * L.S); else { ctx.globalAlpha = 0.35; fillStroke('#FFFFFF', PLUM, 2 * L.S); }
+    ctx.restore();
+    y = L.starY;
+  }
+  if (c && c.gold) { var gp = Math.min(1, (c.t - 0.5) / 0.3), gs = 1 + Math.sin(gp * Math.PI) * 0.5, gx = c.ux, gy = 0.3 * L.H;
+    if (c.sticker) { var q = smooth(Math.min(1, (c.t - 1.0) / 0.5)); gx = lerp(c.ux, albumSlotX(Math.min(11, G.album.length)), q); gy = lerp(0.3 * L.H, L.albumY, q); gs = lerp(1, 0.4, q); }
+    ctx.save(); ctx.translate(gx, gy); ctx.scale(gs, gs); star(0, 0, 0.09 * L.U, 5, 0.5, 0); fillStroke('#FFD166', '#FF9F1C', 5 * L.S); ctx.restore(); }
+  // bonk counter
+  if (G.bonks > 0) { ctx.font = font(Math.max(14, s * 1.1)); ctx.textAlign = 'center'; ctx.textBaseline = 'top'; strokeFillText(String(G.bonks), L.W / 2, L.starY + s * 0.8, '#FFFFFF', 4 * L.S); }
+}
+function drawSticker(x, y, r, col) {
+  circle(x, y, r); fillStroke('#FFFFFF', PLUM, 2 * L.S);
+  circle(x, y, r * 0.78); ctx.fillStyle = col; ctx.fill();
+  ctx.fillStyle = '#FFFFFF'; circle(x - r * 0.28, y - r * 0.15, r * 0.22); ctx.fill(); circle(x + r * 0.28, y - r * 0.15, r * 0.22); ctx.fill();
+  ctx.fillStyle = PLUM; circle(x - r * 0.25, y - r * 0.13, r * 0.1); ctx.fill(); circle(x + r * 0.31, y - r * 0.13, r * 0.1); ctx.fill();
+  ctx.strokeStyle = PLUM; ctx.lineWidth = 2 * L.S; ctx.beginPath(); ctx.arc(x, y + r * 0.15, r * 0.3, 0.3, Math.PI - 0.3); ctx.stroke();
+}
+function drawAlbum() {
+  if (!G.album.length) return;
+  var r = 0.03 * L.U;
+  ctx.save(); ctx.globalAlpha = 0.95;
+  rrect(albumSlotX(0) - r * 1.5, L.albumY - r * 1.4, (G.album.length - 1) * 0.07 * L.U + r * 3, r * 2.8, r); ctx.fillStyle = 'rgba(255,246,229,0.75)'; ctx.fill();
+  for (var i = 0; i < G.album.length; i++) drawSticker(albumSlotX(i), L.albumY, r, G.album[i]);
+  ctx.restore();
+}
+function drawStartUI() {
+  var W = L.W, H = L.H, U = L.U, t = G.time;
+  var it = G.intro, morph = it ? Math.min(1, it.t / 0.3) : 0;
+  if (G.state === 'start' || (it && morph < 1)) {
+    var bx = W / 2, by = H / 2, r = 0.15 * U, pulse = 1.05 + 0.05 * Math.sin(t * TAU);
+    if (it) { var hy = L.holes[it.hole].y; bx = lerp(W / 2, L.holes[it.hole].x, morph); by = lerp(H / 2, hy, morph); pulse *= (1 - morph); }
+    if (pulse > 0.02) {
+      ctx.save(); ctx.translate(bx, by); ctx.scale(pulse, pulse);
+      ctx.strokeStyle = 'rgba(255,166,201,0.55)'; ctx.lineWidth = 0.035 * U; circle(0, 0, r * 1.12 + Math.sin(t * TAU) * 0.01 * U); ctx.stroke();
+      circle(0, 0, r); fillStroke('#06D6A0', PLUM, 6 * L.S);
+      ctx.beginPath(); ctx.moveTo(-r * 0.3, -r * 0.42); ctx.lineTo(r * 0.5, 0); ctx.lineTo(-r * 0.3, r * 0.42); ctx.closePath(); fillStroke('#FFFFFF', PLUM, 4 * L.S);
+      ctx.restore();
+    }
+  }
+  if (G.state !== 'start') return;
+  // title: bubble letters each on its own sine
+  var title = 'ПЛЫГ-ПА-ПА!', size = Math.min(0.11 * U, W * 0.56 / (title.length * 0.68));
+  ctx.font = font(size); ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  var widths = [], total = 0; for (var i = 0; i < title.length; i++) { var w = ctx.measureText(title[i]).width; widths.push(w); total += w; }
+  var x = W / 2 - total / 2, ty = H / 2 - 0.18 * U - size * 0.9 - (H > W ? 0.05 * H : 0);
+  for (var k = 0; k < title.length; k++) {
+    var ly = ty + Math.sin(t * 3 + k * 0.6) * 0.015 * U;
+    ctx.save(); ctx.translate(x + widths[k] / 2, ly); ctx.rotate(Math.sin(t * 2 + k) * 0.06);
+    strokeFillText(title[k], 0, 0, CONFETTI[k % 6], 7 * L.S); ctx.restore();
+    x += widths[k];
+  }
+  // one adult line
+  ctx.font = '500 15px ' + FONT; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  var ly2 = H / 2 + 0.165 * U + 0.02 * H + 13, msg = 'Нажми куда угодно (или пробел)';
+  var mw = ctx.measureText(msg).width; rrect(W / 2 - mw / 2 - 12, ly2 - 13, mw + 24, 26, 13); ctx.fillStyle = 'rgba(255,246,229,0.8)'; ctx.fill();
+  ctx.fillStyle = '#6B6B6B'; ctx.fillText(msg, W / 2, ly2);
+}
+// ---------- render --------------------------------------------------------------------------
+function render() {
+  var W = L.W, H = L.H;
+  ctx.setTransform(L.dpr, 0, 0, L.dpr, 0, 0);
+  ctx.save();
+  var shx = 0, shy = 0;
+  if (G.shakeAmp > 0) { var amp = G.shakeAmp * Math.exp(-G.shakeT / 0.06), a = rnd(0, TAU); shx = Math.cos(a) * amp; shy = Math.sin(a) * amp; }
+  ctx.translate(W / 2 + shx, H / 2 + shy); ctx.scale(G.zoom, G.zoom); ctx.translate(-W / 2, -H / 2);
+  var tr = G.trans, sliding = tr && tr.phase === 'slide';
+  if (sliding) { var p = Math.min(1, tr.t / 0.8), e = smooth(p); drawSceneBg(tr.from, -W * e, true); drawSceneBg(tr.to, W * (1 - e), true); }
+  else {
+    drawSceneBg(G.scene, 0);
+    drawFlowers();
+    drawHolesAndCreatures();
+    drawConga();
+  }
+  for (var i = 0; i < CRE.length; i++) if (CRE[i].state === 'fly') drawCreature(CRE[i]); // tumbles up behind her, never over her face
+  drawParticles(false);
+  drawHero();
+  drawFloaters(); drawButterfly();
+  drawParticles(true); drawTexts(); drawHand();
+  ctx.restore();
+  // UI (not shaken)
+  drawStartUI();
+  if (G.state === 'play') drawStarRow();
+  drawAlbum(); drawMute();
+}
+// ---------- loop ---------------------------------------------------------------------------
+var STEP = 1 / 120, acc = 0, last = 0, rafId = 0, running = false;
+function frame(ts) {
+  if (!running) return;
+  rafId = requestAnimationFrame(frame);
+  var dt = (ts - last) / 1000; last = ts;
+  if (!(dt > 0)) dt = 0; if (dt > 0.1) dt = 0.1;
+  drainInput();
+  if (BGQ.length && !BG[BGQ[0]]) buildBg(BGQ.shift()); else if (BGQ.length) BGQ.shift();
+  acc += dt; var n = 0;
+  while (acc >= STEP && n < 14) { update(STEP); acc -= STEP; n++; }
+  if (n >= 14) acc = 0;
+  render();
+}
+function startLoop() { if (running) return; running = true; last = performance.now(); acc = 0; rafId = requestAnimationFrame(frame); }
+function stopLoop() { running = false; if (rafId) cancelAnimationFrame(rafId); rafId = 0; }
+document.addEventListener('visibilitychange', function () {
+  if (document.hidden) { stopLoop(); clearPtrs(); G.pending = null; try { if (A.ok && A.ctx.state === 'running') { var p = A.ctx.suspend(); if (p && p.catch) p.catch(function () {}); } } catch (e) {} }
+  else { startLoop(); try { if (!navigator.userActivation || navigator.userActivation.hasBeenActive) audioResume(); } catch (e) {} }
+});
+// ---------- debug object for the automated harness ------------------------------------------
+window.__game = {
+  get state() { return G.state; },
+  get bonks() { return G.bonks; },
+  get score() { return G.bonks; },
+  get combo() { return G.combo; },
+  get stars() { return G.stars; },
+  get scene() { return SCENES[G.scene].name; },
+  get muted() { return A.muted; },
+  get audio() { return { ctx: !!A.ctx, state: A.ctx ? A.ctx.state : 'none', music: !!MUSIC.timer, voices: A.voices.length }; },
+  get time() { return G.time; },
+  set time(v) { G.time = Math.max(0, +v || 0); },
+  get transPending() { return G.transPending; },
+  get hero() { return { x: Math.round(hero.x), y: Math.round(hero.y), vy: Math.round(hero.vy), onGround: !hero.air && !hero.stack, airborne: hero.air }; },
+  get creatures() { return CRE.map(function (c) { return { type: c.type, x: Math.round(c.state === 'fly' ? c.fx : c.x), y: Math.round(c.state === 'fly' ? c.fy : c.y), alive: bonkable(c), state: c.state }; }); },
+  tap: function (x, y) { IN.queue.push({ x: +x || 0, y: +y || 0, id: 'dbg', width: 0, n: 1 }); },
+  jump: function () { spaceAction(); },
+  bigBoom: function () { if (G.state === 'start') startGame(); else tryBoom(); },
+  setBonks: function (n) { G.bonks = Math.max(0, n | 0); }
+};
+// ---------- init ------------------------------------------------------------------------------
+layout(); initClouds(); for (var ci = 0; ci < CLOUDS.length; ci++) cloudPos(CLOUDS[ci]);
+hero.x = 0.22 * L.W; hero.y = L.ground; G.lastLand = { x: hero.x, y: hero.y };
+startLoop();
+})();
+</script>
+
+</body></html>

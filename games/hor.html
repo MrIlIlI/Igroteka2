@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Хор зверей</title>
+<style>
+:root { --bg:#0E1020; --panel:#181B31; --panel2:#242949; --o1:#FF7A2F; --o2:#FFB020; --text:#fff; --muted:#A3A9CC; }
+* { box-sizing:border-box; user-select:none; }
+html,body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+body { display:flex; flex-direction:column; align-items:center; gap:14px; padding:14px; }
+h1 { margin:0; font-size:26px; letter-spacing:4px; text-transform:uppercase; font-weight:900;
+  background:linear-gradient(90deg,#fff,#FFE2C2,var(--o2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.stage { display:flex; gap:14px; flex-wrap:wrap; justify-content:center; padding:20px 16px 0; border-radius:20px;
+  background:linear-gradient(#5aa7e0 0 55%, #6cbf4c 55%); border:4px solid #000; box-shadow:0 0 0 3px var(--panel2); max-width:1120px; }
+.animal { display:flex; flex-direction:column; align-items:center; gap:6px; cursor:pointer; padding-bottom:12px; }
+.animal canvas { width:120px; height:120px; image-rendering:pixelated; transition:transform .08s; }
+.animal.sing canvas { transform:translateY(-14px) scale(1.08); }
+.key { font-size:18px; font-weight:800; background:rgba(0,0,0,.45); border-radius:8px; padding:2px 10px; }
+.bar { display:flex; gap:10px; flex-wrap:wrap; justify-content:center; }
+.btn { font:inherit; font-size:20px; font-weight:800; color:#1a1000; border:0; border-radius:999px; padding:12px 26px; cursor:pointer;
+  background:linear-gradient(135deg,var(--o1),var(--o2)); }
+.btn.sec { background:var(--panel); color:var(--text); border:3px solid var(--panel2); }
+.btn.rec { background:#e0392b; color:#fff; }
+.hint { color:var(--muted); font-size:16px; text-align:center; max-width:900px; }
+</style>
+</head>
+<body>
+<h1>Хор зверей</h1>
+<div class="stage" id="stage"></div>
+<div class="bar">
+  <button class="btn" id="song">🎵 Спеть песенку</button>
+  <button class="btn sec" id="rec">⏺ Записать свою</button>
+  <button class="btn sec" id="play" disabled>▶ Моя песенка</button>
+</div>
+<div class="hint">Нажимай на зверей мышкой или кнопками A S D F G H J. Каждый поёт свою ноту. Нажми «Записать свою», спой песенку, а потом послушай её.</div>
+<script>
+const PAL = { k:'#000', w:'#fff', W:'#ddd', p:'#f5a3b5', P:'#d77a8e', b:'#8b5a2b', B:'#5e3a1a', y:'#ffd23f', o:'#ff7a2f', r:'#e0392b', g:'#9aa0a6', G:'#5f6368', s:'#f1c27d', n:'#3a2a1a', c:'#ffffff' };
+// 16x16 sprites; the row marked by 'M' in mouth[] is replaced when singing
+const ANIMALS = [
+  { name:'Корова', voice:'sawtooth', note:0, key:'a', rows:[
+    '................','..kk........kk..','.kWWkkkkkkkkWWk.','..kwwwwkkkwwwk..','..kwkwwwwwwkwk..','..kwwwwwwwwwwk..',
+    '...kwkkwwkkwk...','...kwwwwwwwwk...','...kppppppppk...','...kpkppppkpk...','...kppppppppk...','....kkkkkkkk....',
+    '...kwwkkkwwwk...','..kwkwwwwwkwwk..','..kwwwwkwwwwwk..','..kkk..kk..kkk..'], mouth:10, open:'...kpkkkkkkpk...' },
+  { name:'Собака', voice:'square', note:1, key:'s', rows:[
+    '................','..kkk......kkk..','.kbbbk....kbbbk.','.kbBbkkkkkkbBbk.','.kbbkssssssbkbk.','..kkssssssssskk.',
+    '...ksksssskssk..','...kssssssssk...','...ksssskkssk...','...kssskkkssk...','....kssssssk....','....kkkkkkkk....',
+    '...kbbbbbbbbk...','..kbsbbbbbbsbk..','..kbbbbbbbbbbk..','..kkk.kk.kk.kk..'], mouth:9, open:'...kssskrrssk...' },
+  { name:'Овца', voice:'triangle', note:2, key:'d', rows:[
+    '................','....kkkkkkkk....','..kkwwwwwwwwkk..','.kwwwwwwwwwwwwk.','kwwwkkkkkkkkwwwk','kwwkGGGGGGGGkwwk',
+    'kwwkGkGGGGkGkwwk','.kwkGGGGGGGGkwk.','..kkGGGkkGGGkk..','...kGGGkkGGGk...','....kGGGGGGk....','..kkkkkkkkkkkk..',
+    '.kwwwwwwwwwwwwk.','.kwwwwwwwwwwwwk.','..kkk.kk.kk.kk..','................'], mouth:9, open:'...kGGkrrkGGk...' },
+  { name:'Утка', voice:'square', note:3, key:'f', rows:[
+    '................','.....kkkkk......','....kyyyyyk.....','...kyyyyyyyk....','...kyykyyyyk....','...kyyyyyyyk....',
+    '..koooookyyyk...','..koooookyyyk...','...kkkkkyyyyk...','.......kyyyyykk.','..kkk.kyyyyyyyk.','.kyyykyyyyyyyk..',
+    '.kyyyyyyyyyyyk..','..kyyyyyyyyyk...','...kkkkkkkkk....','....kok..kok....'], mouth:7, open:'..k.....kyyyk...' },
+  { name:'Свинья', voice:'sawtooth', note:4, key:'g', rows:[
+    '................','..kkk......kkk..','..kPpk....kpPk..','..kppkkkkkkppk..','.kppppppppppppk.','.kppkppppppkppk.',
+    '.kppppppppppppk.','.kpppkPPPPkpppk.','.kpppPkPPkPpppk.','.kpppkPPPPkpppk.','..kpppppppppk...','...kkkkkkkkk....',
+    '..kppppppppppk..','.kppppppppppppk.','..kkk.kk.kk.kk..','................'], mouth:10, open:'..kpppkrrkpppk..' },
+  { name:'Петух', voice:'triangle', note:5, key:'h', rows:[
+    '.....r.r........','....rrrrr.......','....kwwwwk......','...kwwkwwk......','..kyywwwwk......','.kyyywwwwk......',
+    '..kkkwrwwk......','.....rwwwk..kk..','....kwwwwwk.kGk.','...kwwwwwwwkkGk.','..kwwwwbbwwwkGk.','..kwwwbbbbwwwk..',
+    '...kwwwwwwwwk...','....kkkkkkkk....','......y..y......','.....yy.yy......'], mouth:4, open:'.kyyk.wwwk......' },
+  { name:'Кошка', voice:'sine', note:6, key:'j', rows:[
+    '................','..k..........k..','..kk........kk..','..kgk......kgk..','..kgggkkkkgggk..','..kggggggggggk..',
+    '.kgggkgggggkggk.','.kggggggggggggk.','.kgggggPPgggggk.','..kgggkggkgggk..','...kggggggggk...','....kkkkkkkk....',
+    '...kggggggggk...','..kggwggggwggk..','..kggggggggggk..','..kkk.kk.kk.kk..'], mouth:9, open:'..kggkrrrkgggk..' }
+];
+// pentatonic scale C D E G A C D
+const FREQ = [261.6, 293.7, 329.6, 392.0, 440.0, 523.3, 587.3];
+let ac;
+function audio() { if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)(); return ac; }
+
+function draw(cv, a, singing) {
+  const ctx = cv.getContext('2d');
+  ctx.clearRect(0, 0, 16, 16);
+  a.rows.forEach((row, y) => {
+    const r = (singing && y === a.mouth) ? a.open : row;
+    [...r].forEach((ch, x) => { if (ch !== '.') { ctx.fillStyle = PAL[ch]; ctx.fillRect(x, y, 1, 1); } });
+  });
+}
+
+function sing(i, dur = 0.45) {
+  const a = ANIMALS[i], c = audio(), t = c.currentTime;
+  const o = c.createOscillator(), f = c.createBiquadFilter(), g = c.createGain(), lfo = c.createOscillator(), lg = c.createGain();
+  o.type = a.voice; o.frequency.value = FREQ[a.note];
+  lfo.frequency.value = 6; lg.gain.value = FREQ[a.note] * 0.015; lfo.connect(lg); lg.connect(o.frequency);
+  f.type = 'lowpass'; f.frequency.value = 1400; f.Q.value = 4;
+  g.gain.setValueAtTime(0, t); g.gain.linearRampToValueAtTime(0.22, t + 0.03); g.gain.setValueAtTime(0.22, t + dur - 0.1); g.gain.linearRampToValueAtTime(0, t + dur);
+  o.connect(f); f.connect(g); g.connect(c.destination);
+  o.start(t); lfo.start(t); o.stop(t + dur + 0.05); lfo.stop(t + dur + 0.05);
+  const el = cards[i];
+  el.classList.add('sing'); draw(el.querySelector('canvas'), a, true);
+  setTimeout(() => { el.classList.remove('sing'); draw(el.querySelector('canvas'), a, false); }, dur * 1000);
+  if (recording) recorded.push([i, performance.now() - recStart]);
+}
+
+const stage = document.getElementById('stage');
+const cards = ANIMALS.map((a, i) => {
+  const d = document.createElement('div'); d.className = 'animal';
+  const cv = document.createElement('canvas'); cv.width = 16; cv.height = 16; draw(cv, a, false);
+  const k = document.createElement('div'); k.className = 'key'; k.textContent = a.key.toUpperCase();
+  d.appendChild(cv); d.appendChild(k);
+  d.onpointerdown = () => sing(i);
+  stage.appendChild(d);
+  return d;
+});
+document.addEventListener('keydown', e => {
+  if (e.repeat) return;
+  const i = ANIMALS.findIndex(a => e.code === 'Key' + a.key.toUpperCase());
+  if (i >= 0) sing(i);
+});
+
+// a simple tune, notes are animal indices
+const TUNE = [0,0,4,4,5,5,4,-1, 3,3,2,2,1,1,0,-1, 4,4,3,3,2,2,1,-1, 4,4,3,3,2,2,1,-1, 0,0,4,4,5,5,4,-1, 3,3,2,2,1,1,0];
+let playing = false;
+function playSeq(seq, timed) {
+  if (playing) return; playing = true;
+  let k = 0;
+  if (timed) {
+    seq.forEach(([i, ms]) => setTimeout(() => sing(i), ms));
+    setTimeout(() => playing = false, (seq.length ? seq[seq.length - 1][1] : 0) + 600);
+    return;
+  }
+  const tick = () => {
+    if (k >= seq.length) { playing = false; return; }
+    if (seq[k] >= 0) sing(seq[k], 0.35);
+    k++; setTimeout(tick, 380);
+  };
+  tick();
+}
+document.getElementById('song').onclick = () => playSeq(TUNE, false);
+
+let recording = false, recorded = [], recStart = 0;
+const recBtn = document.getElementById('rec'), playBtn = document.getElementById('play');
+recBtn.onclick = () => {
+  recording = !recording;
+  if (recording) { recorded = []; recStart = performance.now(); recBtn.textContent = '⏹ Стоп'; recBtn.className = 'btn rec'; }
+  else { recBtn.textContent = '⏺ Записать свою'; recBtn.className = 'btn sec'; playBtn.disabled = recorded.length === 0; }
+};
+playBtn.onclick = () => playSeq(recorded, true);
+</script>
+</body>
+</html>

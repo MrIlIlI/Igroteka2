@@ -1,0 +1,1907 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Игротека</title>
+<style>
+:root {
+  --bg: #0E1020; --card: #181B31; --card-2: #242949; --text: #FFFFFF; --muted: #A3A9CC;
+  --o1: #FF7A2F; --o2: #FFB020; --robot: #35D0BA;
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; }
+body {
+  background:
+    radial-gradient(circle at 0% 0%, rgba(124, 77, 255, 0.30), transparent 36%),
+    radial-gradient(circle at 100% 0%, rgba(190, 80, 255, 0.22), transparent 38%),
+    var(--bg);
+  background-attachment: fixed;
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  padding: 26px 40px 60px;
+}
+header { display: flex; align-items: center; justify-content: center; gap: 24px; margin-bottom: 22px; flex-wrap: wrap; }
+h1 {
+  margin: 0; font-size: 64px; font-weight: 900; letter-spacing: 6px; text-transform: uppercase;
+  background: linear-gradient(90deg, #FFFFFF 0%, #FFE2C2 50%, var(--o2) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.dice {
+  font: inherit; font-size: 20px; font-weight: 800; color: var(--text); cursor: pointer;
+  background: var(--card); border: 2px solid var(--card-2); border-radius: 999px; padding: 10px 20px;
+  transition: transform .15s ease, border-color .15s ease;
+}
+.dice:hover { border-color: var(--o1); transform: rotate(-4deg); }
+.filters { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin: 0 auto 32px; max-width: 1300px; }
+.pill {
+  font: inherit; font-size: 21px; font-weight: 600; color: var(--text);
+  background: var(--card); border: 2px solid var(--card-2);
+  border-radius: 999px; padding: 9px 18px 9px 20px; cursor: pointer;
+  display: inline-flex; align-items: center; gap: 8px;
+}
+.pill .n { font-size: 14px; font-weight: 700; color: var(--muted); background: var(--card-2); border-radius: 999px; padding: 2px 8px; }
+.pill.active { background: linear-gradient(135deg, var(--o1), var(--o2)); border-color: transparent; color: #1a1000; font-weight: 700; }
+.pill.active .n { background: rgba(0,0,0,.18); color: #1a1000; }
+.pill.robot { border-color: var(--robot); }
+.pill.robot.active { background: linear-gradient(135deg, #1fa58f, var(--robot)); color: #04201b; }
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 30px 26px; max-width: 1600px; margin: 0 auto; }
+.tile { font: inherit; color: inherit; text-align: left; background: none; border: 0; padding: 0; cursor: pointer; }
+.cover {
+  position: relative; width: 100%; aspect-ratio: 1 / 1;
+  border-radius: 20px; overflow: hidden; background: var(--card);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  outline: 3px solid transparent;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, outline-color 0.15s ease;
+}
+.cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.cover.pixel img { image-rendering: pixelated; }
+.fallback {
+  width: 100%; height: 100%; display: flex; align-items: center; justify-content: center;
+  font-size: 96px; background: linear-gradient(135deg, var(--c, #3d2c6e), #1b1d36);
+}
+.badge {
+  position: absolute; top: 10px; left: 10px; font-size: 13px; font-weight: 800; letter-spacing: 1px;
+  background: var(--robot); color: #04201b; border-radius: 999px; padding: 3px 10px; box-shadow: 0 2px 8px rgba(0,0,0,.4);
+}
+.tile:hover .cover, .tile:focus-visible .cover {
+  transform: translateY(-5px); outline-color: var(--o1);
+  box-shadow: 0 0 36px rgba(255, 122, 47, 0.45), 0 14px 30px rgba(0, 0, 0, 0.4);
+}
+.tile:focus-visible { outline: none; }
+.name { margin: 14px 2px 8px; font-size: 21px; font-weight: 700; line-height: 1.2; }
+.chips { display: flex; gap: 6px; margin: 0 2px; flex-wrap: wrap; }
+.chip { font-size: 15px; color: var(--muted); background: var(--card-2); border-radius: 999px; padding: 3px 10px; }
+.overlay {
+  position: fixed; inset: 0; z-index: 10; display: none;
+  align-items: center; justify-content: center; padding: 24px; background: rgba(6, 7, 16, 0.72);
+}
+.overlay.open { display: flex; }
+.sheet {
+  position: relative; width: min(560px, 100%); max-height: 100%; overflow: auto;
+  background: var(--card); border-radius: 28px; padding: 30px;
+  box-shadow: 0 30px 80px rgba(0, 0, 0, 0.6);
+}
+.close {
+  position: absolute; top: 14px; right: 14px; width: 56px; height: 56px; z-index: 2;
+  border-radius: 50%; border: 0; background: var(--card-2); color: var(--text);
+  font-size: 34px; line-height: 1; cursor: pointer;
+}
+.sheet .cover { width: 240px; margin: 0 auto 22px; }
+.sheet h2 { margin: 0 0 8px; font-size: 34px; text-align: center; }
+.src { text-align: center; color: var(--muted); font-size: 15px; letter-spacing: 2px; text-transform: uppercase; margin-bottom: 18px; }
+.src.robot { color: var(--robot); }
+.desc { font-size: 23px; line-height: 1.4; text-align: center; margin: 0 0 14px; }
+.note { font-size: 17px; text-align: center; color: var(--o2); margin: 0 0 16px; }
+.meta { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; margin-bottom: 26px; }
+.play {
+  display: block; text-align: center; text-decoration: none;
+  font-size: 34px; font-weight: 800; letter-spacing: 2px; color: #1a1000;
+  background: linear-gradient(135deg, var(--o1), var(--o2));
+  border-radius: 999px; padding: 18px;
+}
+.play:hover { filter: brightness(1.08); }
+.play:focus-visible, .close:focus-visible, .pill:focus-visible, .dice:focus-visible { outline: 3px solid #FFFFFF; outline-offset: 3px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Игротека</h1>
+  <button class="dice" id="dice" type="button">🎲 Случайная игра</button>
+</header>
+<nav class="filters" id="filters"></nav>
+<main class="grid" id="grid"></main>
+
+<div class="overlay" id="overlay">
+  <div class="sheet" role="dialog" aria-modal="true">
+    <button class="close" id="close" type="button" aria-label="Закрыть">×</button>
+    <div id="sCover"></div>
+    <h2 id="sTitle"></h2>
+    <div class="src" id="sSrc"></div>
+    <p class="desc" id="sDesc"></p>
+    <p class="note" id="sNote"></p>
+    <div class="meta" id="sMeta"></div>
+    <a class="play" id="sPlay" target="_blank" rel="noopener">ИГРАТЬ</a>
+  </div>
+</div>
+
+<script>
+const GAMES = [
+ {
+  "name": "Песок и огонь",
+  "kind": "calm",
+  "age": 5,
+  "url": "games/pesok.html",
+  "img": "img/robot-pesok.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Сделал робот",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Песочница с настоящей физикой: сыпь песок, лей воду, поджигай дерево и смотри, что будет. Вода тушит огонь, лава превращается в камень, семечко прорастает.",
+  "robot": true,
+  "pixel": true
+ },
+ {
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "name": "Сонные призраки",
+  "kind": "skill",
+  "age": 6,
+  "url": "games/sleepy.html",
+  "img": "img/robot-sleepy.png",
+  "source": "Сделал робот",
+  "controls": "стрелки или WASD",
+  "players": "1",
+  "desc": "Маленький призрак видит сон в поле, а к нему лезут смешные чудища. Его искорки летят сами, ты бегаешь, собираешь звёздочки и выбираешь новые силы. Продержись до утра!",
+  "robot": true,
+  "pixel": true
+ },
+ {
+  "name": "До рассвета",
+  "kind": "skill",
+  "age": 6,
+  "url": "games/svetlyachok.html",
+  "img": "img/robot-svet.png",
+  "emoji": "🌙",
+  "color": "#1b1d36",
+  "source": "Сделал робот",
+  "controls": "стрелки или WASD",
+  "players": "1",
+  "desc": "Ночью в лес приходят ворчуны-бяки и хотят потушить твой фонарик. Твой свет сам их отгоняет, а ты бегаешь, собираешь звёздочки и выбираешь новые силы. Продержись до утра!",
+  "robot": true,
+  "pixel": true
+ },
+ {
+  "name": "Хор зверей",
+  "kind": "music",
+  "age": 4,
+  "url": "games/hor.html",
+  "img": "img/robot-hor.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Сделал робот",
+  "controls": "мышь или клавиши",
+  "players": "1-2",
+  "desc": "Корова, собака, овца, утка, свинья, петух и кошка поют каждый свою ноту. Сочини песенку, запиши её и послушай.",
+  "robot": true,
+  "pixel": true
+ },
+ {
+  "name": "Лабиринт дракона",
+  "kind": "adventure",
+  "age": 5,
+  "url": "games/labirint.html",
+  "img": "img/robot-labirint.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Сделал робот",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Лабиринт в темноте: факел светит недалеко. Найди три кристалла и принеси их дракону. Каждый раз лабиринт новый, а с каждым уровнем больше.",
+  "robot": true,
+  "pixel": true
+ },
+ {
+  "name": "Плыг-Па-Па!",
+  "kind": "skill",
+  "age": 3,
+  "url": "games/plyg.html",
+  "img": "img/robot-plyg.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Сделал робот",
+  "controls": "мышь или пробел",
+  "players": "1",
+  "desc": "Весёлые зверьки выглядывают из норок, а девочка с молоточком прыгает туда, куда ты нажмёшь. Для самых маленьких.",
+  "robot": true
+ },
+ {
+  "name": "Найди пару",
+  "kind": "memory",
+  "age": 4,
+  "url": "games/pary.html",
+  "img": "img/robot-pary.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Сделал робот",
+  "controls": "мышь",
+  "players": "1-2",
+  "desc": "Карточки с драконами, фениксами, кракенами и сундуками. Запомни, где кто, и найди все пары. Можно вдвоём по очереди.",
+  "robot": true,
+  "pixel": true
+ },
+ {
+  "name": "Пиратский счёт",
+  "kind": "numbers",
+  "age": 5,
+  "url": "games/schet.html",
+  "img": "img/robot-schet.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Сделал робот",
+  "controls": "мышь или цифры",
+  "players": "1",
+  "desc": "Считай пиратские монетки: сложение и вычитание до 10 и до 20. Каждые 10 правильных ответов - новый сундук.",
+  "robot": true,
+  "pixel": true
+ },
+ {
+  "name": "Супер Марио",
+  "kind": "jump",
+  "age": 6,
+  "url": "https://www.joshuakgoldberg.com/FullScreenMario/Source/",
+  "img": "img/super-mario.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Другой сайт",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Тот самый Марио: беги вправо, прыгай на грибы и черепах, собирай монетки. 32 уровня из старой игры.",
+  "note": "Подсказки на экране по-английски."
+ },
+ {
+  "name": "Огонь и Вода",
+  "kind": "two",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/fireboy-and-watergirl-1-in-the-forest-temple-96860",
+  "img": "img/fireboy-watergirl-1.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "WASD и стрелки",
+  "players": "1-2",
+  "desc": "Огонь и Вода вместе проходят лесной храм: каждый собирает свои кристаллы и открывает путь другому."
+ },
+ {
+  "name": "Сабвей Серф",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://poki.com/ru/g/subway-surfers",
+  "img": "img/n2-subway-surfers.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелки: влево, вправо, вверх - прыжок, вниз - кувырок",
+  "players": "1",
+  "desc": "Беги по рельсам, перепрыгивай поезда и собирай монеты."
+ },
+ {
+  "name": "Ам Ням",
+  "kind": "puzzle",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/am-niam-pererezh-veriovku-289684",
+  "img": "img/amnyam.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Перережь верёвки, чтобы конфета упала Ам Няму в рот."
+ },
+ {
+  "name": "Остров чемпионов",
+  "kind": "adventure",
+  "age": 7,
+  "url": "https://www.google.com/logos/2020/kitsune/rc6/kitsune20.html?hl=ru",
+  "img": "img/champion-island.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "стрелки и пробел",
+  "players": "1",
+  "desc": "Большое пиксельное приключение: кошка-ниндзя попадает на остров из японских сказок и побеждает чемпионов в семи видах спорта.",
+  "note": "Много текста - лучше со взрослым."
+ },
+ {
+  "name": "Курочка через дорогу",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://poki.com/ru/g/crossy-road",
+  "img": "img/n2-crossy-road.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелки: шаг вперёд и в стороны",
+  "players": "1",
+  "desc": "Переведи кубическую курочку через дороги, реки и рельсы. Каждое нажатие - один шаг."
+ },
+ {
+  "name": "Кот-волшебник",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2016/halloween16/halloween16.html?hl=ru",
+  "img": "img/svg-cat1.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Первая часть: котик-волшебник прогоняет привидений из школы, рисуя мышкой значки над ними."
+ },
+ {
+  "name": "Магазин обезьянок",
+  "kind": "calm",
+  "age": 5,
+  "url": "https://poki.com/ru/g/monkey-mart",
+  "img": "img/n2-monkey-mart.png",
+  "emoji": "🌙",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелки или W, A, S, D (или мышкой)",
+  "players": "1",
+  "desc": "Обезьянка собирает урожай, раскладывает товары по полкам и обслуживает покупателей."
+ },
+ {
+  "name": "Смешной футбол",
+  "kind": "two",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/futbol-sluchainyi-197306",
+  "img": "img/soccer-random.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "W и стрелка вверх",
+  "players": "1-2",
+  "desc": "Футбол одной кнопкой: игроки падают и подпрыгивают, а мяч летит куда попало."
+ },
+ {
+  "name": "Плохое мороженое",
+  "kind": "two",
+  "age": 6,
+  "url": "https://poki.com/ru/g/bad-ice-cream",
+  "img": "img/n2-bad-ice-cream.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Игрок 1 - стрелки и пробел, игрок 2 - W, A, S, D и F",
+  "players": "1-2",
+  "desc": "Мороженое бегает по лабиринту и собирает фрукты. Строй ледяные стены, чтобы не поймали монстры.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Город на воде",
+  "kind": "calm",
+  "age": 4,
+  "url": "https://oskarstalberg.com/Townscaper/",
+  "img": "img/townscaper.png",
+  "emoji": "🌙",
+  "color": "#2b3570",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Нажимай на воду, и вырастают разноцветные домики: строй свой город, проиграть нельзя."
+ },
+ {
+  "name": "Мотогонки X3M",
+  "kind": "skill",
+  "age": 7,
+  "url": "https://poki.com/ru/g/moto-x3m",
+  "img": "img/n2-moto-x3m.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Вверх - газ, вниз - тормоз, влево/вправо - наклон",
+  "players": "1",
+  "desc": "Мотоцикл мчится по трамплинам и препятствиям. Держи равновесие и доедь до финиша."
+ },
+ {
+  "name": "Улитка Боб 3",
+  "kind": "puzzle",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/ulitka-bob-3-neobitaemyi-ostrov-442218",
+  "img": "img/bob3.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Помоги улитке Бобу добраться до выхода: нажимай кнопки и рычаги."
+ },
+ {
+  "name": "Поющие блобы",
+  "kind": "music",
+  "age": 4,
+  "url": "https://gacembed.withgoogle.com/blob-opera?lang=ru&locale=ru",
+  "img": "img/blob-opera.png",
+  "emoji": "🌙",
+  "color": "#2b3570",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Четыре смешных блоба поют оперу: тяни их мышкой вверх и вниз, и они поют выше или ниже."
+ },
+ {
+  "name": "Ловкие воры 2",
+  "kind": "two",
+  "age": 7,
+  "url": "https://ru.y8.com/games/money_movers_2",
+  "img": "img/n2-mm2.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Y8",
+  "controls": "Один брат - стрелки, другой - W, A, S, D",
+  "players": "1-2",
+  "desc": "Братья снова вместе. Вдвоём проходите уровни, нажимайте кнопки и уносите мешки с монетами."
+ },
+ {
+  "name": "Мальчик-лук",
+  "kind": "jump",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/super-onion-boy-2-415849",
+  "img": "img/super-onion-boy-2.png",
+  "emoji": "🏃",
+  "color": "#7a3b2e",
+  "source": "Яндекс Игры",
+  "controls": "стрелки и пробел",
+  "players": "1",
+  "desc": "Ретро-платформер как Марио: маленький герой прыгает по врагам и спасает похищенного друга."
+ },
+ {
+  "name": "Битва призраков",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://www.google.com/logos/2021/halloween18_reboot/r1025/halloween18_reboot.html?hl=ru",
+  "img": "img/svg-ghosts1.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Призраки в двух командах собирают огоньки и уносят их к себе. Кто больше соберёт, тот и победил.",
+  "note": "Играют по интернету с другими людьми."
+ },
+ {
+  "name": "Спрячь апельсин",
+  "kind": "puzzle",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/cover-orange-puteshestvie-286418",
+  "img": "img/cover-orange-journey.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Спрячь апельсинки от злой тучи: роняй сверху предметы, чтобы укрыть их от дождя."
+ },
+ {
+  "name": "Космонавт Астро",
+  "kind": "jump",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/189286",
+  "img": "img/pixel-adventure.png",
+  "emoji": "🏃",
+  "color": "#7a3b2e",
+  "source": "Яндекс Игры",
+  "controls": "стрелки и пробел",
+  "players": "1",
+  "desc": "Пиксельный космонавт прыгает по платформам, собирает фрукты и ищет кристаллы, чтобы вернуться домой."
+ },
+ {
+  "name": "Кот-пират",
+  "kind": "jump",
+  "age": 6,
+  "url": "https://poki.com/ru/g/nekopirate-quest-for-gold",
+  "img": "img/n2-nekopirate.png",
+  "emoji": "🏃",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелки или A/D - бег, W или стрелка вверх - прыжок, пробел - сабля",
+  "players": "1",
+  "desc": "Кот-пират бежит по пляжу, прыгает и собирает монеты по пути к сундуку с сокровищами.",
+  "note": "Не проверено, слушается ли кот клавиш: в проверке он стоял."
+ },
+ {
+  "name": "Красный шарик",
+  "kind": "jump",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/red-ball-4-263344",
+  "img": "img/red-ball-4.png",
+  "emoji": "🏃",
+  "color": "#7a3b2e",
+  "source": "Яндекс Игры",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Красный мячик катится и прыгает по уровням и не даёт злым квадратам сделать Землю квадратной."
+ },
+ {
+  "name": "Лисёнок Фокси",
+  "kind": "jump",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/foxy-land-2-197228",
+  "img": "img/foxy-land-2.png",
+  "emoji": "🏃",
+  "color": "#7a3b2e",
+  "source": "Яндекс Игры",
+  "controls": "WASD и стрелки",
+  "players": "1-2",
+  "desc": "Лисёнок прыгает по платформам, собирает вишни и спасает своих лисят. Можно играть вдвоём."
+ },
+ {
+  "name": "Мир Алекса",
+  "kind": "jump",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/alex-world-197434",
+  "img": "img/alex-world.png",
+  "emoji": "🏃",
+  "color": "#7a3b2e",
+  "source": "Яндекс Игры",
+  "controls": "стрелки и пробел",
+  "players": "1",
+  "desc": "Почти как Марио: прыгай по платформам, собирай монетки и победи трёх боссов в замках."
+ },
+ {
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "name": "Приключения Неженки",
+  "kind": "jump",
+  "age": 7,
+  "url": "https://poki.com/ru/g/fancy-pants",
+  "img": "img/n2-fancy.png",
+  "source": "Poki",
+  "controls": "стрелки и S",
+  "players": "1",
+  "desc": "Человечек в штанишках бегает, скользит по горкам и прыгает по нарисованному миру.",
+  "note": "Прыжок на S, бег стрелками - сначала покажи."
+ },
+ {
+  "name": "Найди друзей",
+  "kind": "adventure",
+  "age": 4,
+  "url": "https://amanita-design.net/thequestfortherest/",
+  "img": "img/quest-for-the-rest.png",
+  "emoji": "🗺️",
+  "color": "#3b5a2e",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Сказка от авторов «Чучела»: нажимай на всё вокруг и помогай маленьким человечкам найти друзей."
+ },
+ {
+  "name": "Найди конфетку",
+  "kind": "adventure",
+  "age": 7,
+  "url": "https://poki.com/ru/g/find-the-candy",
+  "img": "img/n2-find-the-candy.png",
+  "emoji": "🗺️",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: нажимать и перетаскивать предметы",
+  "players": "1",
+  "desc": "В каждой комнате спрятана конфетка. Открывай коробки, замки и шкафы, чтобы её найти.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Панголин",
+  "kind": "adventure",
+  "age": 6,
+  "url": "https://www.google.com/logos/2017/vday17/vday17-27917071.html?hl=ru",
+  "img": "img/pangolin.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Панголин путешествует по разным странам, чтобы встретиться с подружкой."
+ },
+ {
+  "name": "Щенок-беглец",
+  "kind": "adventure",
+  "age": 5,
+  "url": "https://frvr.com/play/dogescape/",
+  "img": "img/n2-dog.png",
+  "emoji": "🗺️",
+  "color": "#3d2c6e",
+  "source": "FRVR",
+  "controls": "Мышка: зажать и вести щенка",
+  "players": "1",
+  "desc": "Выведи щенка из комнаты к выходу, а потом заботься о нём в приюте.",
+  "note": "Не проверено, двигается ли щенок: в проверке он стоял."
+ },
+ {
+  "name": "Ам Ням 2",
+  "kind": "puzzle",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/am-niam-pererezh-veriovku-2-511180",
+  "img": "img/amnyam2.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Вторая часть: снова режь верёвки, чтобы Ам Ням получил конфету."
+ },
+ {
+  "name": "Ам Ням: Магия",
+  "kind": "puzzle",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/am-niam-pererezh-veriovku-magiia-482665",
+  "img": "img/om-nom-magic.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Режь верёвки мышкой, чтобы конфета упала в рот Ам Няму. Ам Ням превращается в волшебных зверей."
+ },
+ {
+  "name": "Ам Ням: Путешествие во времени",
+  "kind": "puzzle",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/am-niam-pererezh-verevku-puteshestvie-vo-vremeni-503258",
+  "img": "img/503258.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Ам Ням путешествует по эпохам и режет верёвки."
+ },
+ {
+  "name": "Братья-динозаврики",
+  "kind": "puzzle",
+  "age": 6,
+  "url": "https://poki.com/ru/g/dino-bros",
+  "img": "img/n2-dino-bros.png",
+  "emoji": "🧩",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелки или W, A, S, D: оба динозаврика ходят вместе",
+  "players": "1",
+  "desc": "Два динозаврика ходят одновременно. Собери монеты и доведи обоих до выхода."
+ },
+ {
+  "name": "Вилли в сказке",
+  "kind": "puzzle",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/wheely-6-fairytale-425997",
+  "img": "img/wheely-6.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Машинка Вилли попадает в сказку: нажимай рычаги и кнопки, чтобы она доехала до финиша."
+ },
+ {
+  "name": "Машинка Вилли",
+  "kind": "puzzle",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/wheely-3-96821",
+  "img": "img/wheely-3.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Маленькая красная машинка едет домой, а ты включаешь мосты, кнопки и рычаги на её пути."
+ },
+ {
+  "name": "Робот Робби",
+  "kind": "puzzle",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/robbie-96763",
+  "img": "img/robbie.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Робот Робби чинит фабрику: нажимай на предметы в правильном порядке, чтобы роботы снова стали добрыми."
+ },
+ {
+  "name": "Тетрис",
+  "kind": "puzzle",
+  "age": 7,
+  "url": "https://play.tetris.com/",
+  "img": "img/n2-tetris.png",
+  "emoji": "🧩",
+  "color": "#3d2c6e",
+  "source": "Tetris.com",
+  "controls": "Стрелки: двигать, вверх - повернуть, пробел - уронить",
+  "players": "1",
+  "desc": "Поворачивай падающие фигурки и собирай из них целые ряды."
+ },
+ {
+  "name": "Улитка Боб 5",
+  "kind": "puzzle",
+  "age": 6,
+  "url": "https://ru.y8.com/games/snail_bob_5",
+  "img": "img/n2-sb5.png",
+  "emoji": "🧩",
+  "color": "#3d2c6e",
+  "source": "Y8",
+  "controls": "Мышка: нажимать кнопки и рычаги",
+  "players": "1",
+  "desc": "Улитка Боб ползёт сам. Нажимай кнопки и рычаги, чтобы он добрался до двери."
+ },
+ {
+  "name": "Улитка Боб 7",
+  "kind": "puzzle",
+  "age": 6,
+  "url": "https://ru.y8.com/games/snail_bob_7_fantasy_story",
+  "img": "img/n2-sb7.png",
+  "emoji": "🧩",
+  "color": "#3d2c6e",
+  "source": "Y8",
+  "controls": "Мышка: нажимать кнопки и рычаги",
+  "players": "1",
+  "desc": "Сказочный мир с замком и драконом. Помоги улитке Бобу пройти через все ловушки."
+ },
+ {
+  "name": "Улитка Боб: зима",
+  "kind": "puzzle",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/snail-bob-6-winter-story-96817",
+  "img": "img/snail-bob-6.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Зимняя история: помогай улитке Бобу дойти до выхода, нажимая кнопки и рычаги."
+ },
+ {
+  "name": "Улитка Боб: остров",
+  "kind": "puzzle",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/snail-bob-8-island-story-96819",
+  "img": "img/snail-bob-8.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Боб на острове: двигай платформы и дёргай рычаги, чтобы улитка добралась до выхода."
+ },
+ {
+  "name": "Duolingo",
+  "kind": "think",
+  "age": 6,
+  "url": "https://www.duolingo.com/",
+  "img": "img/duolingo.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Короткие уроки с совой: английский, математика, шахматы.",
+  "note": "Нужен аккаунт: сначала входит взрослый."
+ },
+ {
+  "name": "Кролик и морковки",
+  "kind": "think",
+  "age": 5,
+  "url": "https://www.google.com/logos/2017/logo17/logo17.html?hl=ru",
+  "img": "img/svg-bunny.svg",
+  "emoji": "🧠",
+  "color": "#2d6b4f",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Собери программу из блоков-стрелок, чтобы кролик прошёл по дорожке и собрал все морковки."
+ },
+ {
+  "name": "Лабиринт-программа",
+  "kind": "think",
+  "age": 6,
+  "url": "https://blockly.games/maze?lang=ru",
+  "img": "img/n2-blockly-maze.png",
+  "emoji": "🧠",
+  "color": "#3d2c6e",
+  "source": "Blockly Games",
+  "controls": "Мышка: собирать блоки и нажать «Запустить Программу»",
+  "players": "1",
+  "desc": "Собери из блоков команды «шагнуть вперёд» и «повернуть», чтобы человечек дошёл до флажка."
+ },
+ {
+  "name": "Майнкрафт: программируем",
+  "kind": "think",
+  "age": 7,
+  "url": "https://studio.code.org/ru/courses/mc/units/1/lessons/1/levels/1",
+  "img": "img/n2-codeorg-minecraft.png",
+  "emoji": "🧠",
+  "color": "#3d2c6e",
+  "source": "Code.org",
+  "controls": "Мышка: перетаскивать блоки, кнопка «Выполнить»",
+  "players": "1",
+  "desc": "Складывай команды из блоков, чтобы Стив дошёл до овечки в мире Майнкрафта."
+ },
+ {
+  "name": "Пицца",
+  "kind": "think",
+  "age": 6,
+  "url": "https://www.google.com/logos/2021/pizza/rc5/pizza.html?hl=ru",
+  "img": "img/pizza.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Режь пиццу так, чтобы каждому досталось то, что он заказал."
+ },
+ {
+  "name": "Путь мумии",
+  "kind": "think",
+  "age": 7,
+  "url": "https://poki.com/ru/g/mummys-path-deluxe",
+  "img": "img/n2-mummys-path.png",
+  "emoji": "🧠",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: перетащить стрелку на поле, потом кнопка GO",
+  "players": "1",
+  "desc": "Египетская головоломка: расставь стрелки, чтобы голова мумии докатилась до своего тела.",
+  "note": "Не проверено до конца: в проверке стрелка не ставилась."
+ },
+ {
+  "name": "Сапёр",
+  "kind": "think",
+  "age": 7,
+  "url": "https://www.google.com/fbx?fbx=minesweeper&hl=ru",
+  "img": "img/svg-mines.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Открывай клетки и не попадай на мины: цифры подсказывают, где они спрятаны."
+ },
+ {
+  "name": "Учи.ру",
+  "kind": "think",
+  "age": 6,
+  "url": "https://uchi.ru/",
+  "img": "img/svg-uchi.svg",
+  "emoji": "📚",
+  "color": "#1f6f50",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Задания по математике, русскому и другим предметам для школьников.",
+  "note": "Нужен аккаунт: сначала входит взрослый."
+ },
+ {
+  "name": "Шахматы",
+  "kind": "think",
+  "age": 6,
+  "url": "https://lichess.org/learn",
+  "img": "img/svg-chess.svg",
+  "emoji": "♞",
+  "color": "#2d6b4f",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Уроки шахмат: как ходит каждая фигура, с заданиями и звёздочками.",
+  "note": "Подписи нужно читать - лучше со взрослым."
+ },
+ {
+  "name": "Шахматы ChessKid",
+  "kind": "think",
+  "age": 7,
+  "url": "https://www.chesskid.com/ru/play/computer",
+  "img": "img/n2-chesskid.png",
+  "emoji": "🧠",
+  "color": "#3d2c6e",
+  "source": "ChessKid",
+  "controls": "Мышка: перетаскивать фигуры",
+  "players": "1",
+  "desc": "Шахматы против мультяшных ботов. Есть уроки и задачи.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Шахматы для малышей",
+  "kind": "think",
+  "age": 6,
+  "url": "https://poki.com/ru/g/jr-chess",
+  "img": "img/n2-jr-chess.png",
+  "emoji": "🧠",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: перетаскивать фигуры",
+  "players": "1",
+  "desc": "Шахматы с мультяшными фигурами против компьютера. Куда можно пойти, подсвечено."
+ },
+ {
+  "name": "Ам Ням: башня",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/om-nom-tower-3d-204334",
+  "img": "img/om-nom-tower-3d.png",
+  "emoji": "⚡",
+  "color": "#2e5a7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Крути башню из разноцветных шариков и стреляй: три одинаковых шарика лопаются."
+ },
+ {
+  "name": "Ам Ням: бег",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/am-niam-gonka-153785",
+  "img": "img/om-nom-run.png",
+  "emoji": "⚡",
+  "color": "#2e5a7a",
+  "source": "Яндекс Игры",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Ам Ням бежит по улицам города, прыгает через препятствия и собирает монетки."
+ },
+ {
+  "name": "Ам Ням: шарики",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/am-niam-shariki-176736",
+  "img": "img/om-nom-bubbles.png",
+  "emoji": "⚡",
+  "color": "#2e5a7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Помоги Ам Няму стрелять шариками: три шарика одного цвета лопаются."
+ },
+ {
+  "name": "Баскетбол",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2012/basketball-2012-hp.html",
+  "img": "img/n2-basketball-2012.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "Зажать пробел - сила броска, отпустить - бросок",
+  "players": "1",
+  "desc": "Забрось как можно больше мячей в кольцо, пока идёт время."
+ },
+ {
+  "name": "Бег из храма 2",
+  "kind": "skill",
+  "age": 7,
+  "url": "https://poki.com/ru/g/temple-run-2",
+  "img": "img/n2-temple-run-2.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелки: прыжок, подкат, повороты; пробел - старт",
+  "players": "1",
+  "desc": "Беги по древнему храму над пропастью, прыгай и поворачивай на углах.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Бег с барьерами",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2012/hurdles-2012-hp.html",
+  "img": "img/n2-hurdles-2012.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "Быстро нажимать стрелки влево-вправо, пробел - прыжок",
+  "players": "1",
+  "desc": "Жми стрелки по очереди, чтобы бегун бежал быстрее, и прыгай через барьеры."
+ },
+ {
+  "name": "Безумная машинка",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://poki.com/ru/g/drive-mad",
+  "img": "img/n2-drive-mad.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелка вправо - вперёд, влево - назад",
+  "players": "1",
+  "desc": "Проведи машинку по шатким мостам и горкам и не перевернись."
+ },
+ {
+  "name": "Бейсбол",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2019/july4th19/r6/july4th19.html?hl=ru",
+  "img": "img/baseball.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "пробел или мышь",
+  "players": "1",
+  "desc": "Орешек с битой отбивает мячи: нажимай вовремя, и мяч улетит далеко."
+ },
+ {
+  "name": "Битва призраков 2",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://www.google.com/logos/2021/halloween21/v81123/halloween21.html?hl=ru",
+  "img": "img/svg-ghosts2.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Вторая битва призраков: новые карты и новые способности.",
+  "note": "Играют по интернету с другими людьми."
+ },
+ {
+  "name": "Дракончик Блумги",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://poki.com/ru/g/blumgi-dragon",
+  "img": "img/n2-blumgi-dragon.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Пробел или клик: выстрел огнём, второе нажатие - прыжок к нему",
+  "players": "1-2",
+  "desc": "Маленький дракон стреляет огненными шарами и перелетает к ним. Взрывай бомбочек-монстров.",
+  "note": "Режим на одного или двоих выбирают выстрелом в табличку."
+ },
+ {
+  "name": "Змейка",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/fbx?fbx=snake_arcade",
+  "img": "img/svg-snake.svg",
+  "emoji": "🐍",
+  "color": "#2e5a7a",
+  "source": "Google",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Змейка растёт, когда ест яблоки. Не врезайся в стены и в себя."
+ },
+ {
+  "name": "Кот-волшебник 2",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2020/halloween20/rc1/halloween20.html?hl=ru",
+  "img": "img/svg-cat2.svg",
+  "emoji": "⚡",
+  "color": "#2e5a7a",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Котик-волшебник ныряет под воду и снова прогоняет привидений, рисуя мышкой значки."
+ },
+ {
+  "name": "Мороженое и перцы",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2016/scoville/scoville16.html?hl=ru",
+  "img": "img/scoville.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Мороженое сражается с острыми перцами: жми вовремя, чтобы остудить их."
+ },
+ {
+  "name": "Пакман",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://www.google.com/logos/2010/pacman10-hp.html",
+  "img": "img/svg-arcade.svg",
+  "emoji": "👾",
+  "color": "#2e5a7a",
+  "source": "Google",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Собирай точки и убегай от привидений. Старая игра из Google."
+ },
+ {
+  "name": "Попкорн",
+  "kind": "skill",
+  "age": 6,
+  "url": "https://www.google.com/logos/2024/popcorn/rc5/popcorn.html?hl=ru",
+  "img": "img/popcorn.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "стрелки",
+  "players": "1",
+  "desc": "Командная игра про попкорн.",
+  "note": "Играют по интернету с другими людьми."
+ },
+ {
+  "name": "Садовые гномы",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2018/gnomes/gnomes18.html?hl=ru",
+  "img": "img/garden-gnomes.png",
+  "emoji": "⚡",
+  "color": "#2e5a7a",
+  "source": "Google",
+  "controls": "пробел или мышь",
+  "players": "1",
+  "desc": "Запускай садовых гномов из катапульты как можно дальше по саду."
+ },
+ {
+  "name": "Сверчок и мяч",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2017/cricket17/cricket17.html?hl=ru",
+  "img": "img/cricket-doodle.png",
+  "emoji": "⚡",
+  "color": "#2e5a7a",
+  "source": "Google",
+  "controls": "пробел или мышь",
+  "players": "1",
+  "desc": "Сверчок с битой отбивает мяч, который бросают улитки: жми кнопку вовремя."
+ },
+ {
+  "name": "Чай с шариками",
+  "kind": "skill",
+  "age": 5,
+  "url": "https://www.google.com/logos/2023/boba/rc3/boba.html?hl=ru",
+  "img": "img/boba.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Собачка готовит чай с шариками: наливай и добавляй, что просят гости."
+ },
+ {
+  "name": "Человечек на крючках",
+  "kind": "skill",
+  "age": 7,
+  "url": "https://poki.com/ru/g/stickman-hook",
+  "img": "img/n2-stickman-hook.png",
+  "emoji": "⚡",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Зажать мышку или пробел - зацепиться, отпустить - полететь",
+  "players": "1",
+  "desc": "Человечек раскачивается на крючках, как на качелях, и летит к финишу."
+ },
+ {
+  "name": "Boxing Random",
+  "kind": "two",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/boxing-random-197305",
+  "img": "img/197305.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "клавиатура",
+  "players": "1-2",
+  "desc": "Бокс: человечки машут руками, а кто победит, решает случай."
+ },
+ {
+  "name": "Volley Random",
+  "kind": "two",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/volley-random-197307",
+  "img": "img/197307.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "клавиатура",
+  "players": "1-2",
+  "desc": "Волейбол одной кнопкой: игроки падают и прыгают, а мяч летит куда попало."
+ },
+ {
+  "name": "Близнецы-лучники",
+  "kind": "two",
+  "age": 7,
+  "url": "https://poki.com/ru/g/twin-shot",
+  "img": "img/n2-twin-shot.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Игрок 1 - стрелки и пробел, игрок 2 - W, A, S, D и F",
+  "players": "1-2",
+  "desc": "Крылатые лучники прыгают по облакам и стреляют стрелами в мультяшных монстров. Можно вдвоём.",
+  "note": "Меню по-английски."
+ },
+ {
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "name": "Близнецы-лучники 2",
+  "kind": "two",
+  "age": 7,
+  "url": "https://poki.com/ru/g/twin-shot-2-html5",
+  "img": "img/n2-twin2.png",
+  "source": "Poki",
+  "controls": "стрелки и клавиши",
+  "players": "1-2",
+  "desc": "Два ангелочка-лучника вместе проходят уровни и стреляют в монстриков.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Два шара 3D: Темный",
+  "kind": "two",
+  "age": 6,
+  "url": "https://yandex.ru/games/app/dva-shara-3d-temnyi-192107",
+  "img": "img/192107.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "клавиатура",
+  "players": "1-2",
+  "desc": "Бег по дорожке: два шара катятся вниз, их нужно не потерять."
+ },
+ {
+  "name": "Динозаврики",
+  "kind": "two",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/dino-meat-hunt-dry-land-201408",
+  "img": "img/dino-meat-hunt.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "WASD и стрелки",
+  "players": "1-2",
+  "desc": "Два динозаврика вместе проходят уровни: маленький высоко прыгает, большой ломает преграды."
+ },
+ {
+  "name": "Дуэль на двоих",
+  "kind": "two",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/igry-na-dvoikh-duel-227711",
+  "img": "img/games-for-two-duel.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "по одной кнопке (например, Z и M)",
+  "players": "2",
+  "desc": "Восемь игр на двоих: танчики, пинг-понг, крестики-нолики. Можно играть и против компьютера."
+ },
+ {
+  "name": "Игры на четверых",
+  "kind": "two",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/2-3-4-player-games-233488",
+  "img": "img/2-3-4-player-games.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "WASD, стрелки, IJKL и TFGH",
+  "players": "2-4",
+  "desc": "21 мини-игра для одного–четырёх игроков за одной клавиатурой: гонки, снежки, футбол, краски."
+ },
+ {
+  "name": "Крестики-нолики",
+  "kind": "two",
+  "age": 4,
+  "url": "https://www.google.com/fbx?fbx=tic_tac_toe&hl=ru",
+  "img": "img/svg-ttt.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1-2",
+  "desc": "Крестики-нолики вдвоём за одним компьютером или против компьютера."
+ },
+ {
+  "name": "Ловкие воры",
+  "kind": "two",
+  "age": 7,
+  "url": "https://ru.y8.com/games/money_movers",
+  "img": "img/n2-mm1.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Y8",
+  "controls": "Один брат - стрелки, другой - W, A, S, D",
+  "players": "1-2",
+  "desc": "Два брата бегут из тюрьмы. Помогайте друг другу, двигайте ящики и собирайте мешки с монетами.",
+  "note": "Меню по-английски. Старая игра, всё по-английски."
+ },
+ {
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "name": "Ловкие воры 3",
+  "kind": "two",
+  "age": 7,
+  "url": "https://ru.y8.com/games/money_movers_3_guard_duty",
+  "img": "img/n2-mm3.png",
+  "source": "Y8",
+  "controls": "стрелки и WASD",
+  "players": "1-2",
+  "desc": "Третья часть: братья теперь охранники и ловят воров. Лазеры, кнопки и двери.",
+  "note": "Меню по-английски. Трудная - лучше со взрослым."
+ },
+ {
+  "name": "Мини-игры 3D",
+  "kind": "two",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/mini-igry-na-dvoikh-3-286057",
+  "img": "img/mini-games-for-two-3.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "WASD и стрелки",
+  "players": "2-4",
+  "desc": "12 мини-игр в 3D: соревнуйтесь вдвоём, втроём или вчетвером на одной клавиатуре."
+ },
+ {
+  "name": "Мини-игры на двоих",
+  "kind": "two",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/mini-igry-na-dvoikh-2-202043",
+  "img": "img/mini-games-for-two-2.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "WASD и стрелки",
+  "players": "2",
+  "desc": "Десять простых игр на двоих на скорость и ловкость: догонялки, толкалки, гонки."
+ },
+ {
+  "name": "Огонь и Вода 2",
+  "kind": "two",
+  "age": 7,
+  "url": "https://www.coolmathgames.com/0-fireboy-watergirl-2-light-temple",
+  "img": "img/n2-fw2.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Другой сайт",
+  "controls": "Огонь - стрелки, Вода - W, A, D",
+  "players": "1-2",
+  "desc": "Огонь и Вода снова вместе. Направляйте лучи света зеркалами и вдвоём дойдите до своих дверей.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Огонь и Вода 3",
+  "kind": "two",
+  "age": 7,
+  "url": "https://www.coolmathgames.com/0-fireboy-watergirl-3-ice-temple",
+  "img": "img/n2-fw3.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Другой сайт",
+  "controls": "Огонь - стрелки, Вода - W, A, D",
+  "players": "1-2",
+  "desc": "Ледяной храм: Огонь скользит по льду, а Вода вязнет в снегу. Помогите друг другу дойти до дверей.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Огонь и Вода 4",
+  "kind": "two",
+  "age": 7,
+  "url": "https://www.coolmathgames.com/0-fireboy-watergirl-4-crystal-temple",
+  "img": "img/n2-fw4.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Другой сайт",
+  "controls": "Огонь - стрелки, Вода - W, A, D",
+  "players": "1-2",
+  "desc": "Хрустальный храм с волшебными порталами. Прыгайте в порталы и собирайте камни вдвоём.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Огонь и Вода 5",
+  "kind": "two",
+  "age": 7,
+  "url": "https://www.coolmathgames.com/0-fireboy-watergirl-5-elements",
+  "img": "img/n2-fw5.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Другой сайт",
+  "controls": "Огонь - стрелки, Вода - W, A, D",
+  "players": "1-2",
+  "desc": "Огонь и Вода в храме стихий: огонь, вода, ветер и свет. Проходите уровни вдвоём."
+ },
+ {
+  "name": "Огонь и Вода 6",
+  "kind": "two",
+  "age": 7,
+  "url": "https://www.coolmathgames.com/0-fireboy-watergirl-6-fairy-tales",
+  "img": "img/n2-fw6.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Другой сайт",
+  "controls": "Огонь - стрелки, Вода - W, A, D",
+  "players": "1-2",
+  "desc": "Сказочный храм: Огонь и Вода проходят уровни вдвоём и собирают камни."
+ },
+ {
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "name": "Плохое мороженое 3",
+  "kind": "two",
+  "age": 6,
+  "url": "https://poki.com/ru/g/bad-ice-cream-3",
+  "img": "img/n2-bic3.png",
+  "source": "Poki",
+  "controls": "стрелки и пробел",
+  "players": "1-2",
+  "desc": "Мороженое собирает фрукты и строит ледяные стены от врагов. Можно вдвоём.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Ра3ума Игры 2-3-4 Игрока",
+  "kind": "two",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/ra3uma-igry-2-3-4-igroka-209957",
+  "img": "img/209957.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "мышь и клавиатура",
+  "players": "2-4",
+  "desc": "27 мини-игр для двух–четырёх игроков; многие ходят по очереди мышкой."
+ },
+ {
+  "name": "Смешной баскетбол",
+  "kind": "two",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/basket-random-197304",
+  "img": "img/basket-random.png",
+  "emoji": "👥",
+  "color": "#6b2e5a",
+  "source": "Яндекс Игры",
+  "controls": "W и стрелка вверх",
+  "players": "1-2",
+  "desc": "У каждого одна кнопка: человечки прыгают как попало, а нужно закинуть мяч в кольцо."
+ },
+ {
+  "name": "Четыре в ряд",
+  "kind": "two",
+  "age": 5,
+  "url": "https://poki.com/ru/g/four-in-a-row",
+  "img": "img/n2-four-in-a-row.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: выбрать столбик",
+  "players": "1-2",
+  "desc": "Бросай фишки в столбики. Кто первый соберёт четыре в ряд, тот победил."
+ },
+ {
+  "name": "Шашки",
+  "kind": "two",
+  "age": 6,
+  "url": "https://poki.com/ru/g/master-checkers",
+  "img": "img/n2-master-checkers.png",
+  "emoji": "👥",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка",
+  "players": "1-2",
+  "desc": "Шашки против компьютера или вдвоём за одним компьютером.",
+  "note": "Правила, похоже, английские, а не русские."
+ },
+ {
+  "name": "Ам Ням: соедини пары",
+  "kind": "memory",
+  "age": 5,
+  "url": "https://yandex.ru/games/app/om-nom-connect-classic-176735",
+  "img": "img/176735.png",
+  "emoji": "🧩",
+  "color": "#4a2f7a",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Соединяй одинаковые картинки парами. Идёт таймер."
+ },
+ {
+  "name": "Лотерея картинок",
+  "kind": "memory",
+  "age": 6,
+  "url": "https://www.google.com/logos/2019/loteria/r3/loteria19.html?hl=ru",
+  "img": "img/loteria.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Мексиканское лото: на карточке картинки, а ведущий показывает новые. Отмечай свои быстрее всех.",
+  "note": "Можно играть по интернету с другими людьми."
+ },
+ {
+  "name": "Найди голубей",
+  "kind": "memory",
+  "age": 6,
+  "url": "https://poki.com/ru/g/hidden-pigeon",
+  "img": "img/n2-hidden-pigeon.png",
+  "emoji": "🃏",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: нажать на голубя",
+  "players": "1",
+  "desc": "На большой картинке спрятаны голуби. Найди все десять!"
+ },
+ {
+  "name": "Найди отличия",
+  "kind": "memory",
+  "age": 5,
+  "url": "https://poki.com/ru/g/spot-the-differences",
+  "img": "img/n2-spot-the-differences.png",
+  "emoji": "🃏",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: нажать на отличие",
+  "players": "1",
+  "desc": "Две похожие картинки. Найди пять отличий и нажми на них."
+ },
+ {
+  "name": "Пары: подводный мир",
+  "kind": "memory",
+  "age": 4,
+  "url": "https://www.igraemsa.ru/igry-dlja-detej/igry-na-vnimanie-i-pamjat/najdi-paru-vodnyj-mir",
+  "img": "img/n2-ig-pair.png",
+  "emoji": "🃏",
+  "color": "#3d2c6e",
+  "source": "Играемся",
+  "controls": "Мышка: открывать карточки",
+  "players": "1",
+  "desc": "Открывай карточки с морскими жителями и находи одинаковые пары."
+ },
+ {
+  "name": "2048",
+  "kind": "numbers",
+  "age": 8,
+  "url": "https://poki.com/ru/g/2048",
+  "img": "img/n2-2048.png",
+  "emoji": "🔢",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Стрелки: сдвигать плитки",
+  "players": "1",
+  "desc": "Сдвигай плитки с числами. Две одинаковые склеиваются в одну, вдвое больше.",
+  "note": "Нужно понимать удвоение чисел - лучше со взрослым."
+ },
+ {
+  "name": "Весёлый счёт",
+  "kind": "numbers",
+  "age": 4,
+  "url": "https://www.igraemsa.ru/igry-dlja-detej/matematicheskie-igry/veselyj-schet",
+  "img": "img/n2-ig-count.png",
+  "emoji": "🔢",
+  "color": "#3d2c6e",
+  "source": "Играемся",
+  "controls": "Мышка",
+  "players": "1",
+  "desc": "Посчитай предметы на карточке и найди нужную цифру.",
+  "note": "Совсем лёгкая - для младших."
+ },
+ {
+  "name": "Змеи и лесенки",
+  "kind": "numbers",
+  "age": 5,
+  "url": "https://poki.com/ru/g/snakes-and-ladders",
+  "img": "img/n2-snakes-and-ladders.png",
+  "emoji": "🔢",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: бросить кубик",
+  "players": "2-4",
+  "desc": "Бросай кубик и веди фишку к сотой клетке. Лесенки поднимают вверх, змеи спускают вниз.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Line Rider",
+  "kind": "draw",
+  "age": 6,
+  "url": "https://linerider.com/",
+  "img": "img/svg-linerider.svg",
+  "emoji": "🛷",
+  "color": "#7a4b2e",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Нарисуй трассу, по которой поедет санки. Меню по-английски.",
+  "note": "Меню по-английски."
+ },
+ {
+  "name": "Silk",
+  "kind": "draw",
+  "age": 4,
+  "url": "https://weavesilk.com/",
+  "img": "img/silk.png",
+  "emoji": "🌀",
+  "color": "#7a4b2e",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Рисуй линии, которые сами отражаются и складываются в узор."
+ },
+ {
+  "name": "Волшебная раскраска",
+  "kind": "draw",
+  "age": 4,
+  "url": "https://poki.com/ru/g/magic-coloring-book",
+  "img": "img/n2-magic-coloring-book.png",
+  "emoji": "🎨",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: выбрать цвет и раскрашивать",
+  "players": "1",
+  "desc": "Раскрашивай картинки кистью или заливкой."
+ },
+ {
+  "name": "Рисуй и слушай",
+  "kind": "draw",
+  "age": 4,
+  "url": "https://musiclab.chromeexperiments.com/Kandinsky/",
+  "img": "img/kandinsky.png",
+  "emoji": "🎨",
+  "color": "#7a4b2e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Рисуй мышкой линии и круги, а потом нажми кнопку: рисунок оживает и играет музыку."
+ },
+ {
+  "name": "Угадай рисунок",
+  "kind": "draw",
+  "age": 6,
+  "url": "https://quickdraw.withgoogle.com/?locale=ru",
+  "img": "img/svg-quickdraw.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Рисуешь то, что попросят, а компьютер пытается угадать, что это.",
+  "note": "Задание нужно прочитать - лучше со взрослым."
+ },
+ {
+  "name": "Диджей",
+  "kind": "music",
+  "age": 5,
+  "url": "https://www.google.com/logos/2017/hiphop/hiphop17.html?hl=ru",
+  "img": "img/svg-dj.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Ты диджей: крути пластинки и смешивай музыку."
+ },
+ {
+  "name": "Звуки на кнопках",
+  "kind": "music",
+  "age": 4,
+  "url": "https://patatap.com/",
+  "img": "img/patatap.png",
+  "emoji": "🌙",
+  "color": "#2b3570",
+  "source": "Другой сайт",
+  "controls": "клавиатура",
+  "players": "1",
+  "desc": "Жми любые буквы на клавиатуре: звучат весёлые звуки и выскакивают яркие фигуры."
+ },
+ {
+  "name": "Мелодия",
+  "kind": "music",
+  "age": 4,
+  "url": "https://musiclab.chromeexperiments.com/Melody-Maker/",
+  "img": "img/svg-melody.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Нажимай на клеточки, и получится мелодия. Чем выше клетка, тем выше звук."
+ },
+ {
+  "name": "Музыка фигур",
+  "kind": "music",
+  "age": 5,
+  "url": "https://www.google.com/logos/2017/fischinger/fischinger17.html?hl=ru",
+  "img": "img/svg-shapes.svg",
+  "emoji": "🎵",
+  "color": "#1d3b6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Расставляй цветные фигуры, и они играют музыку."
+ },
+ {
+  "name": "Мяузика",
+  "kind": "music",
+  "age": 4,
+  "url": "https://yandex.ru/games/app/miauzika-387266",
+  "img": "img/meowsic.png",
+  "emoji": "🌙",
+  "color": "#2b3570",
+  "source": "Яндекс Игры",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Котики-музыканты мяукают и играют в такт: нажимай на них и сочиняй свою песенку."
+ },
+ {
+  "name": "Ритм",
+  "kind": "music",
+  "age": 4,
+  "url": "https://musiclab.chromeexperiments.com/Rhythm/",
+  "img": "img/rhythm.png",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Обезьянки-барабанщики играют то, что ты расставишь на дорожке."
+ },
+ {
+  "name": "Сочини песню",
+  "kind": "music",
+  "age": 4,
+  "url": "https://musiclab.chromeexperiments.com/Song-Maker/",
+  "img": "img/song-maker.png",
+  "emoji": "🌙",
+  "color": "#2b3570",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Ставь цветные квадратики на сетке и нажимай кнопку: звучит мелодия, которую ты придумал."
+ },
+ {
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "name": "Котик-пиццерия",
+  "kind": "calm",
+  "age": 6,
+  "url": "https://poki.com/ru/g/cat-pizza",
+  "img": "img/n2-catpizza.png",
+  "source": "Poki",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Котик открывает пиццерию: готовь пиццу, обслуживай гостей и расширяй кафе."
+ },
+ {
+  "name": "Песочные замки",
+  "kind": "calm",
+  "age": 4,
+  "url": "https://vectorpark.com/sandcastles/",
+  "img": "img/sandcastles.png",
+  "emoji": "🌙",
+  "color": "#2b3570",
+  "source": "Другой сайт",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Тяни мышкой песок вверх, и из него вырастают песочные замки и башенки."
+ },
+ {
+  "name": "Пчела и цветы",
+  "kind": "calm",
+  "age": 4,
+  "url": "https://www.google.com/logos/2020/earthday20/r3/earthday20.html?hl=ru",
+  "img": "img/svg-bee.svg",
+  "emoji": "🎮",
+  "color": "#3d2c6e",
+  "source": "Google",
+  "controls": "мышь",
+  "players": "1",
+  "desc": "Пчела летает от цветка к цветку и помогает растениям."
+ },
+ {
+  "name": "Собери арбуз",
+  "kind": "calm",
+  "age": 5,
+  "url": "https://poki.com/ru/g/watermelon-drop",
+  "img": "img/n2-watermelon-drop.png",
+  "emoji": "🌙",
+  "color": "#3d2c6e",
+  "source": "Poki",
+  "controls": "Мышка: навести и нажать, чтобы уронить фрукт",
+  "players": "1",
+  "desc": "Роняй фрукты в стакан. Два одинаковых сливаются в больший - дорасти до арбуза!"
+ }
+];
+
+const KINDS = {
+  jump:      { title: 'Прыжки',      icon: '🏃' },
+  adventure: { title: 'Приключения', icon: '🗺️' },
+  puzzle:    { title: 'Головоломки', icon: '🧩' },
+  think:     { title: 'Думаем',      icon: '🧠' },
+  skill:     { title: 'Ловкость',    icon: '⚡' },
+  two:       { title: 'На двоих',    icon: '👥' },
+  memory:    { title: 'Память',      icon: '🃏' },
+  numbers:   { title: 'Счёт',        icon: '🔢' },
+  draw:      { title: 'Рисуем',      icon: '🎨' },
+  music:     { title: 'Музыка',      icon: '🎵' },
+  calm:      { title: 'Спокойно',    icon: '🌙' }
+};
+
+let current = 'all';
+const overlay = document.getElementById('overlay');
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+function fallback(x) { const f = el('div', 'fallback', x.emoji); f.style.setProperty('--c', x.color); return f; }
+function cover(x, withBadge) {
+  const box = el('div', 'cover' + (x.pixel ? ' pixel' : ''));
+  if (x.img) {
+    const im = el('img'); im.alt = ''; im.src = x.img;
+    im.onerror = () => im.replaceWith(fallback(x));
+    box.appendChild(im);
+  } else box.appendChild(fallback(x));
+  if (withBadge && x.robot) box.appendChild(el('span', 'badge', '🤖 РОБОТ'));
+  return box;
+}
+function matches(x, key) {
+  if (key === 'all') return true;
+  if (key === 'robot') return !!x.robot;
+  if (key === 'two') return x.kind === 'two' || /2/.test(x.players);
+  return x.kind === key;
+}
+function pill(key, icon, label, extra) {
+  const n = GAMES.filter(x => matches(x, key)).length;
+  const b = el('button', 'pill' + (extra ? ' ' + extra : '') + (current === key ? ' active' : ''));
+  b.type = 'button';
+  b.appendChild(document.createTextNode(icon + ' ' + label));
+  b.appendChild(el('span', 'n', String(n)));
+  b.onclick = () => { current = key; renderFilters(); renderGrid(); };
+  return b;
+}
+function renderFilters() {
+  const f = document.getElementById('filters');
+  f.innerHTML = '';
+  f.appendChild(pill('all', '✨', 'Все'));
+  if (GAMES.some(x => x.robot)) f.appendChild(pill('robot', '🤖', 'Сделал робот', 'robot'));
+  const present = new Set(GAMES.map(g => g.kind));
+  Object.keys(KINDS).forEach(k => { if (present.has(k)) f.appendChild(pill(k, KINDS[k].icon, KINDS[k].title)); });
+}
+function tile(x) {
+  const t = el('button', 'tile'); t.type = 'button';
+  t.appendChild(cover(x, true));
+  t.appendChild(el('div', 'name', x.name));
+  const chips = el('div', 'chips');
+  chips.appendChild(el('span', 'chip', KINDS[x.kind].icon));
+  chips.appendChild(el('span', 'chip', x.age + '+'));
+  if (/2/.test(x.players) && x.kind !== 'two') chips.appendChild(el('span', 'chip', '👥'));
+  t.appendChild(chips);
+  t.onclick = () => openSheet(x);
+  return t;
+}
+function visible() { return GAMES.filter(x => matches(x, current)); }
+function renderGrid() {
+  const g = document.getElementById('grid'); g.innerHTML = '';
+  visible().forEach(x => g.appendChild(tile(x)));
+}
+function openSheet(x) {
+  const c = document.getElementById('sCover'); c.innerHTML = ''; c.appendChild(cover(x, false));
+  document.getElementById('sTitle').textContent = x.name;
+  const src = document.getElementById('sSrc');
+  src.textContent = x.robot ? 'Сделал робот · эксперимент' : x.source;
+  src.className = 'src' + (x.robot ? ' robot' : '');
+  document.getElementById('sDesc').textContent = x.desc;
+  const note = document.getElementById('sNote');
+  note.textContent = x.note || ''; note.style.display = x.note ? '' : 'none';
+  const m = document.getElementById('sMeta'); m.innerHTML = '';
+  [KINDS[x.kind].icon + ' ' + KINDS[x.kind].title, 'от ' + x.age + ' лет', 'игроков: ' + x.players, 'управление: ' + x.controls]
+    .forEach(t => m.appendChild(el('span', 'chip', t)));
+  document.getElementById('sPlay').href = x.url;
+  overlay.classList.add('open');
+  document.getElementById('sPlay').focus();
+}
+function closeSheet() { overlay.classList.remove('open'); }
+document.getElementById('close').onclick = closeSheet;
+document.getElementById('sPlay').onclick = () => setTimeout(closeSheet, 150);
+overlay.addEventListener('click', e => { if (e.target === overlay) closeSheet(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closeSheet(); });
+document.getElementById('dice').onclick = () => {
+  const list = visible();
+  openSheet(list[Math.floor(Math.random() * list.length)]);
+};
+renderFilters();
+renderGrid();
+</script>
+</body>
+</html>

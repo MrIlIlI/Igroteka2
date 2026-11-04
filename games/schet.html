@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Пиратский счёт</title>
+<style>
+:root { --bg:#0E1020; --panel:#181B31; --panel2:#242949; --o1:#FF7A2F; --o2:#FFB020; --text:#fff; --muted:#A3A9CC; }
+* { box-sizing:border-box; user-select:none; }
+html,body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+body { display:flex; flex-direction:column; align-items:center; gap:14px; padding:14px; }
+h1 { margin:0; font-size:26px; letter-spacing:4px; text-transform:uppercase; font-weight:900;
+  background:linear-gradient(90deg,#fff,#FFE2C2,var(--o2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.bar { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+.tool { font:inherit; font-size:18px; font-weight:700; color:var(--text); background:var(--panel); border:3px solid var(--panel2); border-radius:12px; padding:8px 14px; cursor:pointer; }
+.tool.active { border-color:var(--o1); box-shadow:0 0 18px rgba(255,122,47,.5); background:var(--panel2); }
+canvas { image-rendering:pixelated; border:4px solid #000; box-shadow:0 0 0 3px var(--panel2), 0 14px 40px rgba(0,0,0,.6); max-width:100%; height:auto; }
+.task { font-size:54px; font-weight:900; letter-spacing:4px; }
+.answers { display:flex; gap:16px; }
+.ans { font:inherit; font-size:48px; font-weight:900; width:110px; height:96px; border-radius:18px; border:4px solid #000; cursor:pointer; color:#1a1000;
+  background:linear-gradient(135deg,var(--o1),var(--o2)); box-shadow:0 6px 0 #7a3a10; }
+.ans:active { transform:translateY(4px); box-shadow:0 2px 0 #7a3a10; }
+.ans.wrong { background:#4a4f70; color:#9aa0c0; box-shadow:0 6px 0 #2a2d44; animation:shake .3s; }
+@keyframes shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-8px)} 75%{transform:translateX(8px)} }
+.msg { min-height:30px; font-size:22px; font-weight:700; color:var(--o2); text-align:center; }
+.hint { color:var(--muted); font-size:16px; text-align:center; }
+</style>
+</head>
+<body>
+<h1>Пиратский счёт</h1>
+<div class="bar" id="modes"></div>
+<canvas id="c" width="200" height="90"></canvas>
+<div class="task" id="task"></div>
+<div class="answers" id="answers"></div>
+<div class="msg" id="msg"></div>
+<div class="hint">Посчитай монетки и выбери ответ мышкой или цифрами 1, 2, 3 на клавиатуре. Каждые 10 правильных ответов - новый сундук!</div>
+<script>
+const PAL = { k:'#000', y:'#FFD23F', Y:'#C9971C', w:'#fff', t:'#A0522D', T:'#6B3A1E', r:'#E0392B', g:'#4CC23A', b:'#3A8BE0', s:'#F1C27D', n:'#555A66' };
+const COIN = ['.kkkk.', 'kyyyYk', 'kywyYk', 'kyyyYk', 'kYYYYk', '.kkkk.'];
+const GHOST_COIN = ['.nnnn.', 'n....n', 'n....n', 'n....n', 'n....n', '.nnnn.'];
+const PARROT = [
+  '...rrr....',
+  '..rrrrr...',
+  '..rrwkr...',
+  '..rrrryy..',
+  '.rrrrry...',
+  '.ggrrrr...',
+  'gggbrrr...',
+  '.ggbbrr...',
+  '...bbr....',
+  '...y.y....'];
+const CHEST = [
+  '.TTTTTTTTTTTT.',
+  'TttttttttttttT',
+  'TyyyyyyyyyyyyT',
+  'TttttttttttttT',
+  'TttttykytttttT',
+  'TttttyyytttttT',
+  'TttttttttttttT',
+  'TyyyyyyyyyyyyT',
+  '.TTTTTTTTTTTT.'];
+const MODES = [['➕ до 10', 'add', 10], ['➕ до 20', 'add', 20], ['➖ до 10', 'sub', 10], ['➖ до 20', 'sub', 20]];
+let mode = 0, a, b, answer, solved = 0, chests = 0, wrongOnce = false;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+cv.style.width = '800px';
+
+function spr(rows, x, y) {
+  rows.forEach((row, ry) => [...row].forEach((ch, rx) => { if (ch !== '.') { ctx.fillStyle = PAL[ch]; ctx.fillRect(x + rx, y + ry, 1, 1); } }));
+}
+// coins in rows of 5, so a child can count by fives
+function pile(n, x0, y0, ghost) {
+  for (let i = 0; i < n; i++) {
+    const group = Math.floor(i / 5), inGroup = i % 5;
+    const col = group % 2, row = Math.floor(group / 2);
+    spr(ghost ? GHOST_COIN : COIN, x0 + col * 42 + inGroup * 7, y0 + row * 8);
+  }
+}
+function draw(showResult) {
+  ctx.fillStyle = '#123'; ctx.fillRect(0, 0, 200, 90);
+  // sea and sand
+  ctx.fillStyle = '#1D4E89'; ctx.fillRect(0, 66, 200, 24);
+  ctx.fillStyle = '#2a63a8'; for (let x = 0; x < 200; x += 8) ctx.fillRect(x + (solved % 2) * 4, 70, 4, 1);
+  ctx.fillStyle = '#d9b46a'; ctx.fillRect(0, 60, 200, 7);
+  // chest count in the corner
+  for (let i = 0; i < Math.min(chests, 6); i++) spr(CHEST, 4 + i * 16, 4);
+  spr(PARROT, 182, 48);
+  const op = MODES[mode][1];
+  if (op === 'add') {
+    pile(a, 6, 24, false);
+    ctx.fillStyle = '#fff'; ctx.fillRect(91, 34, 9, 3); ctx.fillRect(94, 31, 3, 9);
+    pile(b, 106, 24, false);
+  } else {
+    // a coins; the last b are taken by the parrot (shown faded)
+    pile(a - b, 30, 24, false);
+    for (let i = a - b; i < a; i++) {
+      const group = Math.floor(i / 5), inGroup = i % 5, col = group % 2, row = Math.floor(group / 2);
+      spr(GHOST_COIN, 30 + col * 42 + inGroup * 7, 24 + row * 8);
+    }
+  }
+  if (showResult) { ctx.fillStyle = 'rgba(255,210,63,.25)'; ctx.fillRect(0, 0, 200, 90); }
+}
+
+function newTask() {
+  const [, op, max] = MODES[mode];
+  if (op === 'add') { a = 1 + Math.floor(Math.random() * (max - 1)); b = 1 + Math.floor(Math.random() * (max - a)); answer = a + b; }
+  else { a = 2 + Math.floor(Math.random() * (max - 1)); b = 1 + Math.floor(Math.random() * (a - 1)); answer = a - b; }
+  document.getElementById('task').textContent = op === 'add' ? `${a} + ${b} = ?` : `${a} − ${b} = ?`;
+  const opts = new Set([answer]);
+  while (opts.size < 3) { const d = answer + (Math.random() < 0.5 ? -1 : 1) * (1 + Math.floor(Math.random() * 3)); if (d >= 0 && d <= max) opts.add(d); }
+  const list = [...opts].sort(() => Math.random() - 0.5);
+  const el = document.getElementById('answers'); el.innerHTML = '';
+  list.forEach((v, i) => {
+    const btn = document.createElement('button'); btn.className = 'ans'; btn.textContent = v;
+    btn.onclick = () => pick(v, btn); el.appendChild(btn);
+  });
+  wrongOnce = false;
+  draw(false);
+}
+
+function pick(v, btn) {
+  if (btn.classList.contains('wrong')) return;
+  if (v === answer) {
+    solved++;
+    if (solved % 10 === 0) { chests++; document.getElementById('msg').textContent = 'Ура! Новый сундук с сокровищами! Всего сундуков: ' + chests; }
+    else document.getElementById('msg').textContent = (wrongOnce ? 'Правильно! ' : 'Точно! ') + 'До сундука: ' + (10 - solved % 10);
+    document.getElementById('task').textContent = MODES[mode][1] === 'add' ? `${a} + ${b} = ${answer}` : `${a} − ${b} = ${answer}`;
+    draw(true);
+    setTimeout(newTask, 900);
+  } else {
+    btn.classList.add('wrong'); wrongOnce = true;
+    document.getElementById('msg').textContent = 'Попугай говорит: «Посчитай ещё раз!»';
+  }
+}
+
+function renderModes() {
+  const el = document.getElementById('modes'); el.innerHTML = '';
+  MODES.forEach(([label], i) => {
+    const b = document.createElement('button'); b.className = 'tool' + (i === mode ? ' active' : ''); b.textContent = label;
+    b.onclick = () => { mode = i; renderModes(); newTask(); }; el.appendChild(b);
+  });
+}
+document.addEventListener('keydown', e => {
+  const n = parseInt(e.key, 10);
+  const btns = document.querySelectorAll('.ans');
+  if (n >= 1 && n <= btns.length) btns[n - 1].click();
+});
+renderModes(); newTask();
+</script>
+</body>
+</html>

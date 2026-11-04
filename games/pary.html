@@ -1,0 +1,257 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Найди пару</title>
+<style>
+:root { --bg:#0E1020; --panel:#181B31; --panel2:#242949; --o1:#FF7A2F; --o2:#FFB020; --text:#fff; --muted:#A3A9CC; --p1:#3A8BE0; --p2:#E0392B; }
+* { box-sizing:border-box; user-select:none; }
+html,body { margin:0; min-height:100%; background:var(--bg); color:var(--text); font-family:"Segoe UI",system-ui,sans-serif; }
+body { display:flex; flex-direction:column; align-items:center; gap:14px; padding:14px; }
+h1 { margin:0; font-size:26px; letter-spacing:4px; text-transform:uppercase; font-weight:900;
+  background:linear-gradient(90deg,#fff,#FFE2C2,var(--o2)); -webkit-background-clip:text; background-clip:text; color:transparent; }
+.bar { display:flex; gap:8px; flex-wrap:wrap; justify-content:center; }
+.tool { font:inherit; font-size:18px; font-weight:700; color:var(--text); background:var(--panel); border:3px solid var(--panel2); border-radius:12px; padding:8px 14px; cursor:pointer; }
+.tool.active { border-color:var(--o1); box-shadow:0 0 18px rgba(255,122,47,.5); background:var(--panel2); }
+.score { display:flex; gap:12px; font-size:22px; font-weight:800; }
+.score span { background:var(--panel); border:3px solid var(--panel2); border-radius:12px; padding:6px 16px; }
+.score span.turn { border-color:var(--o2); box-shadow:0 0 16px rgba(255,176,32,.5); }
+.board { display:grid; gap:10px; }
+.card { width:110px; height:110px; perspective:600px; cursor:pointer; }
+.inner { position:relative; width:100%; height:100%; transition:transform .35s; transform-style:preserve-3d; }
+.card.open .inner, .card.done .inner { transform:rotateY(180deg); }
+.face { position:absolute; inset:0; backface-visibility:hidden; border-radius:12px; border:4px solid #000; display:flex; align-items:center; justify-content:center; }
+.back { background:repeating-linear-gradient(45deg,#2b2f55 0 8px,#242949 8px 16px); box-shadow:inset 0 0 0 3px #3d4380; }
+.back::after { content:'?'; font-size:44px; font-weight:900; color:#5b62a8; }
+.front { background:#14172b; transform:rotateY(180deg); box-shadow:inset 0 0 0 3px #3d4380; }
+.card.done .front { box-shadow:inset 0 0 0 3px var(--o2), 0 0 18px rgba(255,176,32,.45); }
+canvas { image-rendering:pixelated; width:84px; height:84px; }
+.msg { min-height:30px; font-size:22px; font-weight:700; color:var(--o2); text-align:center; }
+.hint { color:var(--muted); font-size:16px; text-align:center; }
+</style>
+</head>
+<body>
+<h1>Найди пару</h1>
+<div class="bar" id="sizes"></div>
+<div class="bar" id="modes"></div>
+<div class="score" id="score"></div>
+<div class="board" id="board"></div>
+<div class="msg" id="msg"></div>
+<div class="hint">Открывай по две карточки. Запомни, где кто прячется, и найди все пары.</div>
+<script>
+const PAL = { k:'#000', w:'#fff', g:'#4CC23A', G:'#2E7D32', r:'#E0392B', o:'#FF7A2F', y:'#FFD23F', b:'#3A8BE0', B:'#1D4E89', p:'#8B5CF6', P:'#5B21B6', c:'#9AD7FF', t:'#A0522D', T:'#6B3A1E', s:'#F1C27D', n:'#555A66', m:'#E86FB0' };
+const CREATURES = [
+  ['Дракон', [
+    '..G....G..',
+    '.GgG..GgG.',
+    '.GggGGggG.',
+    'GggkggkggG',
+    'GgggggggrG',
+    '.GggggggG.',
+    'yGGgggGGy.',
+    '.yGgggGy..',
+    '..GgGgG...',
+    '..GG.GG...']],
+  ['Феникс', [
+    '...r..r...',
+    '..ror.or..',
+    '...rooor..',
+    '..roykor..',
+    '.royyyyr..',
+    'royyyyyyr.',
+    '.roooooor.',
+    '..r.oo.r..',
+    '...roor...',
+    '..r.rr.r..']],
+  ['Кракен', [
+    '...PPPP...',
+    '..PppppP..',
+    '.PpppppppP',
+    '.PpwkpwkpP',
+    '.PppppppP.',
+    '..PppppP..',
+    '.Pp.pp.pP.',
+    'Pp.Pp.pP.p',
+    'p.Pp..pP..',
+    '.p.p..p.p.']],
+  ['Скарабей', [
+    '....yy....',
+    '...yBBy...',
+    '..yBbbBy..',
+    '.yBbbbbBy.',
+    'kyBbbybbBy',
+    '.yBbbybbBy',
+    'kyBbbybbBy',
+    '.yBbbybBy.',
+    '..yBBBBy..',
+    '.k.k..k.k.']],
+  ['Кошка', [
+    'k.......k.',
+    'kk.....kk.',
+    'kkkkkkkkk.',
+    'kkykkkykk.',
+    'kkkkkkkkk.',
+    '.kkkmkkk..',
+    '..yyyyy...',
+    '..kkkkk..k',
+    '.kkkkkkk.k',
+    '.kk.k.kkk.']],
+  ['Сундук', [
+    '..........',
+    '.TTTTTTTT.',
+    'TttttttttT',
+    'TyyyyyyyyT',
+    'TttttttttT',
+    'TyyyykyyyT',
+    'TtttyytttT',
+    'TttttttttT',
+    'TyyyyyyyyT',
+    '.TTTTTTTT.']],
+  ['Корабль', [
+    '....k.....',
+    '....kww...',
+    '....kwww..',
+    '....kwwww.',
+    '....kwww..',
+    '....kww...',
+    'TTTTkTTTTT',
+    '.tttttttT.',
+    '..TTTTTT..',
+    'bbbbbbbbbb']],
+  ['Привидение', [
+    '...wwww...',
+    '..wwwwww..',
+    '.wwwwwwww.',
+    '.wwkwwkww.',
+    '.wwkwwkww.',
+    '.wwwwwwww.',
+    '.wwwmmwww.',
+    '.wwwwwwww.',
+    '.wwwwwwww.',
+    '.w.ww.ww.w']],
+  ['Пирамида', [
+    '....yy....',
+    '...yyyy...',
+    '...ysyy...',
+    '..yssyyy..',
+    '..sssyyy..',
+    '.ssssyyyy.',
+    '.sssssyyy.',
+    'ssssssyyyy',
+    'sssssssyyy',
+    'tttttttttt']],
+  ['Единорог', [
+    '.......y..',
+    '......y...',
+    '....wwwm..',
+    '...wwkwm..',
+    '..wwwwwm..',
+    '.wwww.....',
+    'wwwwwwwww.',
+    'wwwwwwwwwm',
+    '.w.w..w.w.',
+    '.n.n..n.n.']]
+];
+
+function drawSprite(cv, rows) {
+  cv.width = 10; cv.height = 10;
+  const ctx = cv.getContext('2d');
+  rows.forEach((row, y) => [...row].forEach((ch, x) => { if (ch !== '.') { ctx.fillStyle = PAL[ch]; ctx.fillRect(x, y, 1, 1); } }));
+}
+
+const SIZES = [[12, 4, 'Легко'], [16, 4, 'Средне'], [20, 5, 'Трудно']];
+let sizeIdx = 0, twoPlayers = false;
+let deck, open, lock, found, moves, turn, scores;
+
+function shuffle(a) { for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
+function bar(id, items, active, onPick) {
+  const el = document.getElementById(id); el.innerHTML = '';
+  items.forEach((label, i) => {
+    const b = document.createElement('button');
+    b.className = 'tool' + (i === active ? ' active' : '');
+    b.textContent = label;
+    b.onclick = () => onPick(i);
+    el.appendChild(b);
+  });
+}
+function renderBars() {
+  bar('sizes', SIZES.map(s => s[2]), sizeIdx, i => { sizeIdx = i; start(); });
+  bar('modes', ['🙂 Один', '👥 Вдвоём'], twoPlayers ? 1 : 0, i => { twoPlayers = i === 1; start(); });
+}
+
+function renderScore() {
+  const el = document.getElementById('score'); el.innerHTML = '';
+  if (twoPlayers) {
+    ['🔵 Синий', '🔴 Красный'].forEach((n, i) => {
+      const s = document.createElement('span');
+      s.textContent = n + ': ' + scores[i];
+      if (turn === i && found < deck.length / 2) s.className = 'turn';
+      el.appendChild(s);
+    });
+  } else {
+    const s = document.createElement('span'); s.textContent = 'Ходов: ' + moves; el.appendChild(s);
+    const f = document.createElement('span'); f.textContent = 'Пар: ' + found + ' / ' + deck.length / 2; el.appendChild(f);
+  }
+}
+
+function start() {
+  renderBars();
+  const [n, colsN] = SIZES[sizeIdx];
+  const kinds = shuffle([...CREATURES.keys()]).slice(0, n / 2);
+  deck = shuffle([...kinds, ...kinds]);
+  open = []; lock = false; found = 0; moves = 0; turn = 0; scores = [0, 0];
+  const board = document.getElementById('board');
+  board.style.gridTemplateColumns = `repeat(${colsN}, 110px)`;
+  board.innerHTML = '';
+  deck.forEach((k, i) => {
+    const c = document.createElement('div');
+    c.className = 'card';
+    c.innerHTML = '<div class="inner"><div class="face back"></div><div class="face front"><canvas></canvas></div></div>';
+    drawSprite(c.querySelector('canvas'), CREATURES[k][1]);
+    c.title = '';
+    c.onclick = () => flip(i, c);
+    board.appendChild(c);
+  });
+  document.getElementById('msg').textContent = twoPlayers ? 'Ходит синий' : '';
+  renderScore();
+}
+
+function flip(i, el) {
+  if (lock || el.classList.contains('open') || el.classList.contains('done')) return;
+  el.classList.add('open');
+  open.push([i, el]);
+  if (open.length < 2) return;
+  moves++;
+  const [[a, ea], [b, eb]] = open;
+  if (deck[a] === deck[b]) {
+    ea.classList.add('done'); eb.classList.add('done');
+    found++; scores[turn]++;
+    document.getElementById('msg').textContent = 'Пара: ' + CREATURES[deck[a]][0] + '!';
+    open = [];
+    renderScore();
+    if (found === deck.length / 2) finish();
+  } else {
+    lock = true;
+    setTimeout(() => {
+      ea.classList.remove('open'); eb.classList.remove('open');
+      open = []; lock = false;
+      if (twoPlayers) { turn = 1 - turn; document.getElementById('msg').textContent = turn ? 'Ходит красный' : 'Ходит синий'; }
+      else document.getElementById('msg').textContent = '';
+      renderScore();
+    }, 900);
+    renderScore();
+  }
+}
+
+function finish() {
+  let t;
+  if (twoPlayers) t = scores[0] === scores[1] ? 'Ничья! Оба молодцы.' : (scores[0] > scores[1] ? 'Победил синий!' : 'Победил красный!');
+  else t = 'Все пары найдены за ' + moves + ' ходов!';
+  document.getElementById('msg').textContent = t + ' Нажми на размер поля, чтобы сыграть ещё.';
+}
+
+start();
+</script>
+</body>
+</html>
