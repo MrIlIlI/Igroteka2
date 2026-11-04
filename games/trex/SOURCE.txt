@@ -1,0 +1,3 @@
+Source: https://github.com/wayou/t-rex-runner (branch gh-pages, BSD-3-Clause, see LICENSE.txt)
+Files: index.html, index.css, index.js, assets/default_100_percent/, assets/default_200_percent/
+Changes: removed the Google Fonts <link>, replaced "Press Space to start" with «Нажми пробел», title set to «Динозаврик-бегун»; README demo GIFs from assets/ (not used by the game) were not copied. index.js and index.css are unchanged.

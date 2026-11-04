@@ -1,0 +1,3 @@
+Source: https://github.com/PavelDoGreat/WebGL-Fluid-Simulation (branch master, MIT, see LICENSE.txt)
+Files: index.html, script.js, LDR_LLL1_0.png
+Changes: removed Google Analytics, the mobile-app promo block (and its images), logo/og meta tags and the dat.GUI settings panel (startGUI() and dat.gui.min.js/iconfont.ttf are no longer used), so only the fluid canvas is shown; title set to «Цветные брызги». Simulation code is unchanged.

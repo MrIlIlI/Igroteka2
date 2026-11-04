@@ -1,0 +1,3 @@
+Source: https://github.com/KilledByAPixel/1Keys (branch master, GPL-3.0, see LICENSE.txt)
+Files: index.html (the non-minified version)
+Changes: title set to «Пианино», charset meta moved before the title, the Octave/Key numeric inputs are wrapped in a hidden span (the script still reads their default values), the "Shape" label was translated to «Звук». No external links or requests existed in the original; the piano code is unchanged.

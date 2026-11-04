@@ -1,0 +1,30 @@
+Maze Maker by Olivier Giulieri
+Source: https://github.com/evoluteur/maze-maker (branch main)
+Commit: c088380fff541486cc8c8774056106eaaf48391c
+License: MIT (see LICENSE.txt)
+Copied: 2026-11-04
+
+Files taken from the repo: index.html (rewritten), css/core.css, css/densities.css,
+css/common.css, css/maze.css, css/themes/light/light.css, css/themes/light/bg0.png,
+js/maze.js, favicon.png, LICENSE.
+
+Changes for Igroteka (a catalog of games for children, in Russian):
+- Removed Google Tag Manager / gtag analytics, the Google Fonts (Overpass) link,
+  manifest.json, service worker (sw.js) registration, apple-touch-icon, og:image,
+  canonical link, GitHub link, theme picker (js/omg.js dropped; the light theme
+  is linked directly), about.html links, explanatory texts, stats tiles and the
+  footer with sponsor / "other apps" links. The page makes no network requests
+  to any host other than its own.
+- Font: system font stack instead of "Overpass".
+- Hidden from the UI (kept in a hidden block because the game code reads them):
+  Seed, Loops, Solution length, Algorithm, Look, Wall thickness, Color by
+  distance, Pace, Download SVG, stats. Defaults: algorithm backtracker, loops 0,
+  look "hedge", wall 14%, size 12.
+- Kept: Shape, Size (slider limited to 6-24), New maze, Show solution,
+  Start over, Print, Download PNG.
+- Translated visible labels into Russian (index.html and js/maze.js): title,
+  Shape, Size, New maze, Show/Hide solution, Start over, Print, Download PNG,
+  shape names, size labels, the SVG aria-label, the win message
+  ("Ура! Ты нашёл выход!..."). lang="ru".
+- Larger buttons and shape chips (css/maze.css, overrides at the end).
+- Game logic (generation, drawing, playing, solving, export) unchanged.

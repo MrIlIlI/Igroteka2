@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="ru">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Лабиринты</title>
+    <meta
+      name="description"
+      content="Лабиринты: квадрат, круг, треугольник, шестиугольник, звезда и сердце. Проведи точку к выходу стрелками или мышкой."
+    />
+    <link rel="icon" type="image/png" href="favicon.png" />
+    <meta name="theme-color" content="#fdfdff" />
+
+    <link id="omg-core-css" rel="stylesheet" href="css/core.css" />
+    <link id="omg-theme-css" rel="stylesheet" href="css/themes/light/light.css" />
+    <link id="omg-density-css" rel="stylesheet" href="css/densities.css" />
+    <link rel="stylesheet" href="css/common.css" />
+    <link rel="stylesheet" href="css/maze.css" />
+
+    <script src="js/maze.js"></script>
+  </head>
+
+  <body onload="initMaze();" id="omg-body" class="medium">
+    <div id="omg-header">
+      <h1>Лабиринты</h1>
+    </div>
+    <noscript><p class="tagline">Для этой игры нужен JavaScript.</p></noscript>
+    <div class="content">
+      <p class="tagline">
+        Проведи красную точку к выходу. Двигай её стрелками на клавиатуре или
+        тяни мышкой.
+      </p>
+
+      <div class="layout">
+        <div class="stage">
+          <div
+            id="maze"
+            class="canvas-box"
+            tabindex="0"
+            aria-label="Лабиринт. Двигай точку стрелками или тяни её мышкой."
+          ></div>
+          <p class="note" id="play-note" aria-live="polite"></p>
+          <div class="panel solve-panel">
+            <div class="btns">
+              <button type="button" id="solve">Показать путь</button>
+              <button type="button" id="reset" class="ghost">Сначала</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="side">
+          <div class="panel">
+            <div class="btns">
+              <button type="button" id="new">Новый лабиринт</button>
+            </div>
+            <div class="ctl" style="margin-top: 14px">
+              <label>Форма</label>
+            </div>
+            <div
+              class="chips"
+              id="shape-chips"
+              role="group"
+              aria-label="Форма"
+            ></div>
+            <div class="ctl">
+              <label for="size">Размер</label
+              ><span class="val" id="size-val"></span>
+              <input type="range" id="size" min="6" max="24" step="2" />
+            </div>
+          </div>
+
+          <div class="panel">
+            <div class="btns">
+              <button type="button" id="print" class="ghost">Напечатать</button>
+              <button type="button" id="export-png" class="ghost">
+                Скачать картинку
+              </button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Controls hidden from children: the game code still reads them,
+           so they stay in the page with sensible defaults. -->
+      <div id="grownup-controls" hidden>
+        <input type="range" id="loops" min="0" max="100" step="5" />
+        <span id="loops-val"></span>
+        <select id="length"></select>
+        <input type="number" id="seed" min="0" max="1000000000" step="1" />
+        <div id="algo-chips"></div>
+        <p id="algo-note"></p>
+        <div id="look-chips"></div>
+        <input type="range" id="wall" min="4" max="60" step="1" />
+        <span id="wall-val"></span>
+        <input type="checkbox" id="l-heat" />
+        <input type="range" id="speed" min="1" max="20" step="1" />
+        <span id="speed-val"></span>
+        <button type="button" id="export-svg"></button>
+        <div id="stats"></div>
+      </div>
+    </div>
+  </body>
+</html>
